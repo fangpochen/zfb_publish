@@ -362,47 +362,58 @@ def calculate_file_md5(file):
     return md5_hash.hexdigest()
 
 
-if __name__ == '__main__':
-    cookies = {
-        'JSESSIONID': 'RZ55fkNuVDdcAXJGloIA2TSAsoK4SXauthRZ43GZ00',
-        'mobileSendTime': '-1',
-        'credibleMobileSendTime': '-1',
-        'ctuMobileSendTime': '-1',
-        'riskMobileBankSendTime': '-1',
-        'riskMobileAccoutSendTime': '-1',
-        'riskMobileCreditSendTime': '-1',
-        'riskCredibleMobileSendTime': '-1',
-        'riskOriginalAccountMobileSendTime': '-1',
-        'session.cookieNameId': 'ALIPAYJSESSIONID',
-        'cna': 'ova4H2k/PjoBASQOA3pmflO9',
-        'receive-cookie-deprecation': '1',
-        'tfstk': 'fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.',
-        'EXC_ANT_KEY': 'excashier_20001_FP_SENIOR_HJPGP11505070830582',
-        'CLUB_ALIPAY_COM': '2088442960985162',
-        'ali_apache_tracktmp': '"uid=2088442960985162"',
-        'ALI_PAMIR_SID': 'U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2',
-        '__TRACERT_COOKIE_bucUserId': '2088442960985162',
-        'userId': '2088442960985162',
-        'auth_goto_http_type': 'https',
-        'umt': 'HB52d13f5434598308f19d58a857c8a91c',
-        'ctoken': 'kuR774LM4a0zEiuw',
-        '_CHIPS-ctoken': 'kuR774LM4a0zEiuw',
-        'LoginForm': 'alipay_login_home',
-        'iw.userid': '"K1iSL120ipFvFLCnWp3Rzw=="',
-        'auth_jwt': 'e30.eyJleHAiOjE3MzM4NDA4Mjk3ODIsInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoieHNaRUZqNTI1Rm5maFZ1Z0ZIa2VMYXdGZzI0c2cvL3YxZDRiNmFzIiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9.MldCJpGyk2Ap9mbui5BpO80UoVAN9bkQ4_B-aKk18oc',
-        '_CHIPS-ALIPAYJSESSIONID': 'RZ55fkNuVDdcAXJGloIA2TSAsoK4SXauthGZ00RZ55',
-        'ALIPAYJSESSIONID': 'RZ55fkNuVDdcAXJGloIA2TSAsoK4SXauthRZ55GZ00',
-        'rtk': '0L2QuAPvdP8oO8aXXLxAotAAxG61QBqpaMkYNhgJGzYFQBIcGlP',
-        'zone': 'GZ00F',
-        'JSESSIONID': '46DD26910BFA152C3007113914D470E6',
-        'spanner': 'R7aw/GnSb5q1jDUC97hQRX4uGfBBQTb2Xt2T4qEYgj0=',
-    }
-    # 文件路径
-    file_path = '狗/充电器起火，狗狗举动好棒！ #狗子成精了7432903980134550784.mp4'
+def upload_publish_video(cookies, dir_path):
     mt = get_mt(cookies)
-    file_id, videoFileName = upload_4m_video(mt, file_path)
-    extProperty = upload_pic()
-    appid = get_app_id()
-    time.sleep(10)  # 等待10s
-    videoFile = get_video_url(file_id, mt)
-    publish(appid, file_id, videoFile, videoFileName, extProperty)
+    for file_path in os.listdir(dir_path):
+        if file_path.endswith('.mp4'):  # 只处理mp4文件
+            file_id, videoFileName = upload_4m_video(mt, os.path.join(dir_path, file_path))
+            extProperty = upload_pic()
+            appid = get_app_id()
+            time.sleep(10)  # 等待10s
+            videoFile = get_video_url(file_id, mt)
+            publish(appid, file_id, videoFile, videoFileName, extProperty)
+
+# if __name__ == '__main__':
+#     cookies = {
+#         'JSESSIONID': 'RZ55fkNuVDdcAXJGloIA2TSAsoK4SXauthRZ43GZ00',
+#         'mobileSendTime': '-1',
+#         'credibleMobileSendTime': '-1',
+#         'ctuMobileSendTime': '-1',
+#         'riskMobileBankSendTime': '-1',
+#         'riskMobileAccoutSendTime': '-1',
+#         'riskMobileCreditSendTime': '-1',
+#         'riskCredibleMobileSendTime': '-1',
+#         'riskOriginalAccountMobileSendTime': '-1',
+#         'session.cookieNameId': 'ALIPAYJSESSIONID',
+#         'cna': 'ova4H2k/PjoBASQOA3pmflO9',
+#         'receive-cookie-deprecation': '1',
+#         'tfstk': 'fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.',
+#         'EXC_ANT_KEY': 'excashier_20001_FP_SENIOR_HJPGP11505070830582',
+#         'CLUB_ALIPAY_COM': '2088442960985162',
+#         'ali_apache_tracktmp': '"uid=2088442960985162"',
+#         'ALI_PAMIR_SID': 'U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2',
+#         '__TRACERT_COOKIE_bucUserId': '2088442960985162',
+#         'userId': '2088442960985162',
+#         'auth_goto_http_type': 'https',
+#         'umt': 'HB52d13f5434598308f19d58a857c8a91c',
+#         'ctoken': 'kuR774LM4a0zEiuw',
+#         '_CHIPS-ctoken': 'kuR774LM4a0zEiuw',
+#         'LoginForm': 'alipay_login_home',
+#         'iw.userid': '"K1iSL120ipFvFLCnWp3Rzw=="',
+#         'auth_jwt': 'e30.eyJleHAiOjE3MzM4NDA4Mjk3ODIsInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoieHNaRUZqNTI1Rm5maFZ1Z0ZIa2VMYXdGZzI0c2cvL3YxZDRiNmFzIiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9.MldCJpGyk2Ap9mbui5BpO80UoVAN9bkQ4_B-aKk18oc',
+#         '_CHIPS-ALIPAYJSESSIONID': 'RZ55fkNuVDdcAXJGloIA2TSAsoK4SXauthGZ00RZ55',
+#         'ALIPAYJSESSIONID': 'RZ55fkNuVDdcAXJGloIA2TSAsoK4SXauthRZ55GZ00',
+#         'rtk': '0L2QuAPvdP8oO8aXXLxAotAAxG61QBqpaMkYNhgJGzYFQBIcGlP',
+#         'zone': 'GZ00F',
+#         'JSESSIONID': '46DD26910BFA152C3007113914D470E6',
+#         'spanner': 'R7aw/GnSb5q1jDUC97hQRX4uGfBBQTb2Xt2T4qEYgj0=',
+#     }
+#     # 文件路径
+#     file_path = '狗/充电器起火，狗狗举动好棒！ #狗子成精了7432903980134550784.mp4'
+#     mt = get_mt(cookies)
+#     file_id, videoFileName = upload_4m_video(mt, file_path)
+#     extProperty = upload_pic()
+#     appid = get_app_id()
+#     time.sleep(10)  # 等待10s
+#     videoFile = get_video_url(file_id, mt)
+#     publish(appid, file_id, videoFile, videoFileName, extProperty)
