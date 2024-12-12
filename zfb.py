@@ -242,7 +242,7 @@ def get_video_url(file_id, mt):
     return json.loads(response.text).get('data').get('transCode').get('convertResults')[0].get('url')
 
 
-def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt):
+def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, scheduleTime, title):
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9',
@@ -271,7 +271,7 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt):
         'massToken': mt,
         'videoFile': videoFile,
         'videoFileName': videoFileName,
-        'title': videoFileName,
+        'title': title,
         'text': '',
         'canSmartCover': True,
         'canReply': True,
@@ -305,6 +305,7 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt):
             },
         ],
         'offerInfoList': [],
+        'scheduleTime': scheduleTime,
         'topicInfoVOList': [],
         'extInfo': {
             'coverSource': 'custom_settings',
@@ -373,7 +374,7 @@ MAX_REQUESTS_PER_MINUTE = 2
 @sleep_and_retry
 @limits(calls=MAX_REQUESTS_PER_MINUTE, period=ONE_MINUTE)
 def process_single_video(args):
-    cookies, file_path, mt = args
+    cookies, file_path, mt, scheduleTime, title = args
     retries = 3  # 最大重试次数
     
     for attempt in range(retries):
@@ -383,7 +384,7 @@ def process_single_video(args):
             appid = get_app_id()
             time.sleep(10)
             videoFile = get_video_url(file_id, mt)
-            publish(appid, file_id, videoFile, videoFileName, extProperty, mt)
+            publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title)
             # 发布成功后删除视频文件
             os.remove(file_path)
             print(f"Successfully processed and deleted: {file_path}")
@@ -398,7 +399,7 @@ def process_single_video(args):
                 return False
 
 
-def upload_publish_video(cookies, dir_path,title,scheduleTime, max_workers=3):
+def upload_publish_video(cookies, dir_path, title, scheduleTime, max_workers=3):
     """多线程处理视频上传"""
     mt = get_mt(cookies)
     video_files = []
@@ -413,7 +414,7 @@ def upload_publish_video(cookies, dir_path,title,scheduleTime, max_workers=3):
     print(f"Found {len(video_files)} video files to process")
     
     # 准备线程参数
-    thread_args = [(cookies, file_path, mt) for file_path in video_files]
+    thread_args = [(cookies, file_path, mt, scheduleTime, title) for file_path in video_files]
     
     # 使用线程池执行上传任务
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
