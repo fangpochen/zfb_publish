@@ -4,6 +4,7 @@ import os
 import secrets
 import time
 import urllib
+import concurrent.futures
 
 import requests
 
@@ -101,7 +102,7 @@ def upload_large_video(mt, file_path, file_size):
             'x-mass-appkey': 'apwallet',
             'x-mass-biztype': 'content_lifetab',
             'x-mass-cust-conf': '{"extern":{"isWaterMark":true}}',
-            'x-mass-file-length': '9435271',
+            'x-mass-file-length': str(file_size),
             'x-mass-file-md5': calculate_file_md5(file),
             'x-mass-file-multipart-slice-size': '4194304',
             'x-mass-filename': urllib.parse.quote(file.name),
@@ -156,6 +157,7 @@ def upload_large_video(mt, file_path, file_size):
             }
 
             response = requests.post('https://mass.alipay.com/file/multipart/upload/part', headers=headers, files=files)
+            print(str(len(part_data)))
             print(response.json())  # 打印响应信息，检查上传是否成功
 
     upload_complete(mt, file_id)
@@ -187,8 +189,10 @@ def upload_complete(mt, file_id):
     print(response.json())
 
 
-def upload_pic():
-    file_path = '充电器起火狗狗举动好棒狗子成精了.jpg'
+def upload_pic(video_file_path):
+    # 将视频文件路径的扩展名改为.jpg
+    pic_path = os.path.splitext(video_file_path)[0] + '.jpg'
+    
     headers = {
         'accept': 'application/json',
         'accept-language': 'zh-CN,zh;q=0.9,en-GB;q=0.8,en;q=0.7,en-US;q=0.6',
@@ -206,19 +210,35 @@ def upload_pic():
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
     }
 
-    # 打开文件
-    with open(file_path, 'rb') as file:
-        # 构建文件数据
+    # 打开对应的图片文件
+    with open(pic_path, 'rb') as file:
         files = {
             'Filedata': (file.name, file, 'application/octet-stream'),
         }
 
-        response = requests.post('https://contentweb.alipay.com/life/uploadPicAjax.json', cookies=cookies,
-                                 headers=headers, files=files)
+        response = requests.post('https://contentweb.alipay.com/life/uploadPicAjax.json', 
+                               cookies=cookies,
+                               headers=headers, 
+                               files=files)
         return json.loads(response.text).get('extProperty')
 
 
-def get_video_url(file_id, mt):
+def get_video_url(file_id, mt, max_retries=60, retry_interval=5):
+    """
+    获取视频URL,失败时在5分钟内每5秒重试一次
+    
+    Args:
+        file_id: 文件ID
+        mt: token
+        max_retries: 最大重试次数(60次=5分钟)
+        retry_interval: 重试间隔(秒)
+    
+    Returns:
+        str: 视频URL
+    
+    Raises:
+        Exception: 超过最大重试次数后仍失败
+    """
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9',
@@ -234,14 +254,33 @@ def get_video_url(file_id, mt):
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     }
 
-    response = requests.get(
-        f'https://mmtcapi.alipay.com/video/2.0/convert/query?fileId={file_id}&mt={mt}&bizKey=content_lifetab',
-        headers=headers,
-    )
-    return json.loads(response.text).get('data').get('transCode').get('convertResults')[0].get('url')
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(
+                f'https://mmtcapi.alipay.com/video/2.0/convert/query?fileId={file_id}&mt={mt}&bizKey=content_lifetab',
+                headers=headers,
+            )
+            data = json.loads(response.text).get('data', {})
+            trans_code = data.get('transCode', {})
+            convert_results = trans_code.get('convertResults', [])
+            
+            if convert_results and convert_results[0].get('url'):
+                return convert_results[0].get('url')
+                
+            print(f"Attempt {attempt + 1}: Video URL not ready yet, retrying in {retry_interval} seconds...")
+            time.sleep(retry_interval)
+            
+        except Exception as e:
+            print(f"Attempt {attempt + 1} failed: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_interval)
+            else:
+                raise Exception(f"Failed to get video URL after {max_retries} attempts")
+
+    raise Exception(f"Failed to get video URL after {max_retries} attempts")
 
 
-def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty):
+def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, scheduleTime, title):
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9',
@@ -270,7 +309,7 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty):
         'massToken': mt,
         'videoFile': videoFile,
         'videoFileName': videoFileName,
-        'title': videoFileName,
+        'title': title,
         'text': '',
         'canSmartCover': True,
         'canReply': True,
@@ -309,6 +348,10 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty):
             'coverSource': 'custom_settings',
         },
     }
+
+    # 只有当 scheduleTime 有值时才添加到 json_data
+    if scheduleTime:
+        json_data['scheduleTime'] = scheduleTime
 
     response = requests.post(
         'https://contentweb.alipay.com/life/publishShortVideo.json',
@@ -362,58 +405,107 @@ def calculate_file_md5(file):
     return md5_hash.hexdigest()
 
 
-def upload_publish_video(cookies, dir_path):
-    mt = get_mt(cookies)
-    for file_path in os.listdir(dir_path):
-        if file_path.endswith('.mp4'):  # 只处理mp4文件
-            file_id, videoFileName = upload_4m_video(mt, os.path.join(dir_path, file_path))
-            extProperty = upload_pic()
-            appid = get_app_id()
-            time.sleep(10)  # 等待10s
-            videoFile = get_video_url(file_id, mt)
-            publish(appid, file_id, videoFile, videoFileName, extProperty)
+from ratelimit import limits, sleep_and_retry
+import time
 
-# if __name__ == '__main__':
-#     cookies = {
-#         'JSESSIONID': 'RZ55fkNuVDdcAXJGloIA2TSAsoK4SXauthRZ43GZ00',
-#         'mobileSendTime': '-1',
-#         'credibleMobileSendTime': '-1',
-#         'ctuMobileSendTime': '-1',
-#         'riskMobileBankSendTime': '-1',
-#         'riskMobileAccoutSendTime': '-1',
-#         'riskMobileCreditSendTime': '-1',
-#         'riskCredibleMobileSendTime': '-1',
-#         'riskOriginalAccountMobileSendTime': '-1',
-#         'session.cookieNameId': 'ALIPAYJSESSIONID',
-#         'cna': 'ova4H2k/PjoBASQOA3pmflO9',
-#         'receive-cookie-deprecation': '1',
-#         'tfstk': 'fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.',
-#         'EXC_ANT_KEY': 'excashier_20001_FP_SENIOR_HJPGP11505070830582',
-#         'CLUB_ALIPAY_COM': '2088442960985162',
-#         'ali_apache_tracktmp': '"uid=2088442960985162"',
-#         'ALI_PAMIR_SID': 'U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2',
-#         '__TRACERT_COOKIE_bucUserId': '2088442960985162',
-#         'userId': '2088442960985162',
-#         'auth_goto_http_type': 'https',
-#         'umt': 'HB52d13f5434598308f19d58a857c8a91c',
-#         'ctoken': 'kuR774LM4a0zEiuw',
-#         '_CHIPS-ctoken': 'kuR774LM4a0zEiuw',
-#         'LoginForm': 'alipay_login_home',
-#         'iw.userid': '"K1iSL120ipFvFLCnWp3Rzw=="',
-#         'auth_jwt': 'e30.eyJleHAiOjE3MzM4NDA4Mjk3ODIsInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoieHNaRUZqNTI1Rm5maFZ1Z0ZIa2VMYXdGZzI0c2cvL3YxZDRiNmFzIiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9.MldCJpGyk2Ap9mbui5BpO80UoVAN9bkQ4_B-aKk18oc',
-#         '_CHIPS-ALIPAYJSESSIONID': 'RZ55fkNuVDdcAXJGloIA2TSAsoK4SXauthGZ00RZ55',
-#         'ALIPAYJSESSIONID': 'RZ55fkNuVDdcAXJGloIA2TSAsoK4SXauthRZ55GZ00',
-#         'rtk': '0L2QuAPvdP8oO8aXXLxAotAAxG61QBqpaMkYNhgJGzYFQBIcGlP',
-#         'zone': 'GZ00F',
-#         'JSESSIONID': '46DD26910BFA152C3007113914D470E6',
-#         'spanner': 'R7aw/GnSb5q1jDUC97hQRX4uGfBBQTb2Xt2T4qEYgj0=',
-#     }
-#     # 文件路径
-#     file_path = '狗/充电器起火，狗狗举动好棒！ #狗子成精了7432903980134550784.mp4'
-#     mt = get_mt(cookies)
-#     file_id, videoFileName = upload_4m_video(mt, file_path)
-#     extProperty = upload_pic()
-#     appid = get_app_id()
-#     time.sleep(10)  # 等待10s
-#     videoFile = get_video_url(file_id, mt)
-#     publish(appid, file_id, videoFile, videoFileName, extProperty)
+# 限制每分钟最多处理2个视频
+ONE_MINUTE = 60
+MAX_REQUESTS_PER_MINUTE = 2
+
+@sleep_and_retry
+@limits(calls=MAX_REQUESTS_PER_MINUTE, period=ONE_MINUTE)
+def process_single_video(args):
+    cookies, file_path, mt, scheduleTime, title = args
+    retries = 3
+    
+    for attempt in range(retries):
+        try:
+            file_id, videoFileName = upload_4m_video(mt, file_path)
+            # 传入视频文件路径，函数内部会自动查找对应的jpg文件
+            extProperty = upload_pic(file_path)
+            appid = get_app_id()
+            videoFile = get_video_url(file_id, mt)
+            publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title)
+            os.remove(file_path)
+            print(f"Successfully processed and deleted: {file_path}")
+            return True
+        except Exception as e:
+            if attempt < retries - 1:
+                print(f"Attempt {attempt + 1} failed for {file_path}: {str(e)}")
+                time.sleep(5 * (attempt + 1))
+                continue
+            else:
+                print(f"All attempts failed for {file_path}: {str(e)}")
+                return False
+
+
+def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3):
+    """
+    多线程处理视频上传
+    :param cookies: cookies信息
+    :param dir_path: 视频目录路径
+    :param title: 视频标题
+    :param scheduleTime: 定时发布时间（可选）
+    :param max_workers: 最大并发数
+    """
+    mt = get_mt(cookies)
+    video_files = []
+    
+    # 收集所有视频文件路径
+    for root, _, files in os.walk(dir_path):
+        for file_name in files:
+            if file_name.endswith('.mp4'):
+                full_path = os.path.join(root, file_name)
+                video_files.append(full_path)
+    
+    print(f"Found {len(video_files)} video files to process")
+    
+    # 准备线程参数
+    thread_args = [(cookies, file_path, mt, scheduleTime, title) for file_path in video_files]
+    
+    # 使用线程池执行上传任务
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(process_single_video, thread_args))
+    
+    # 统计处理结果
+    success_count = sum(1 for r in results if r)
+    print(f"Processing completed. {success_count} of {len(video_files)} files processed successfully")
+
+
+if __name__ == '__main__':
+    cookies = {
+    'JSESSIONID': 'RZ55bogNYXmmZBiu3kzUs4hRnBqfwkauthRZ43GZ00',
+    'mobileSendTime': '-1',
+    'credibleMobileSendTime': '-1',
+    'ctuMobileSendTime': '-1',
+    'riskMobileBankSendTime': '-1',
+    'riskMobileAccoutSendTime': '-1',
+    'riskMobileCreditSendTime': '-1',
+    'riskCredibleMobileSendTime': '-1',
+    'riskOriginalAccountMobileSendTime': '-1',
+    'session.cookieNameId': 'ALIPAYJSESSIONID',
+    'cna': 'ova4H2k/PjoBASQOA3pmflO9',
+    'receive-cookie-deprecation': '1',
+    'tfstk': 'fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.',
+    'EXC_ANT_KEY': 'excashier_20001_FP_SENIOR_HJPGP11505070830582',
+    'CLUB_ALIPAY_COM': '2088442960985162',
+    'ali_apache_tracktmp': '"uid=2088442960985162"',
+    'ALI_PAMIR_SID': 'U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2',
+    '__TRACERT_COOKIE_bucUserId': '2088442960985162',
+    'userId': '2088442960985162',
+    'spanner': 'DpQZK5KQv4KZ4PF3t8bw0eJqaH3QcX5n4EJoL7C0n0A=',
+    'LoginForm': 'alipay_login_auth',
+    'iw.userid': '"K1iSL120ipFvFLCnWp3Rzw=="',
+    'JSESSIONID': '7C71E477021B00FDC2451579E03EF894',
+    'auth_goto_http_type': 'https',
+    'ctoken': 'DWbrwP5oqEFwVpW3',
+    '_CHIPS-ctoken': 'DWbrwP5oqEFwVpW3',
+    'alipay': '"K1iSL120ipFvFLCnWp3Rz9W5rYlr9VP9dcKwk8Zv/g=="',
+    'auth_jwt': 'e30.eyJleHAiOjE3MzQwMTA0Nzg2OTksInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoiZXg4MjZmYWRGUHV1V2g0OFdxWVp2WDhIOHV4MXhGZ1VzSnVua1E1IiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9.c7rCjzBEa5AYo7-gu-PuVOfeKgR7o1H4hTks8ggsMrk',
+    '_CHIPS-ALIPAYJSESSIONID': 'RZ42xXTVIVlDiehnWssfNwmkO37qtxauthRZ43GZ00',
+    'ALIPAYJSESSIONID': 'RZ42xXTVIVlDiehnWssfNwmkO37qtxauthRZ43GZ00',
+    'rtk': 'Od8BXfDkcTGr0QsRRdgfr3fnjJLO84uhs9+1Cpxmic1y84nziWD',
+    'zone': 'GZ00F',
+}
+    dir_path = "video/"
+    upload_publish_video(cookies, dir_path,'test',None, max_workers=3)  # 设置3个线程并行处理
