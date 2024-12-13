@@ -1,3 +1,4 @@
+import os.path
 import sys
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
@@ -37,6 +38,7 @@ class Thread(QThread):
                     self.delete_note(i)
             except Exception as e:
                 self.error_signal.emit(i)
+
         self.finish_signal.emit(None)
 
     def delete_note(self, i):
@@ -50,7 +52,7 @@ class Thread(QThread):
         """
         id_listm = get_public_list(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], "delete")
         delete_note(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], id_listm)
-        self.delete_note_signal((i, len(id_listm)))
+        self.delete_note_signal.emit((i, len(id_listm)))
 
     def get_public_list(self, i):
         """
@@ -64,9 +66,11 @@ class Thread(QThread):
         recommended_list = get_public_list(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], "recommend")
         if recommended_list is None:
             return None
-        content = f"账号:{self.df.iloc[i]['user_name']}推荐视频id如下:" + "\n    ".join(recommended_list)
-        self.recommend_signal((i, len(recommended_list)))
-        logger.info(content)
+        content = f"账号:{self.df.iloc[i]['user_name']}推荐视频id如下:" + "\n    ".join(
+            [i[['title']] for i in recommended_list])
+
+        self.recommend_signal.emit((i, len(recommended_list)))
+        print(content)
 
     def collecting_tasks(self, i):
         """
@@ -89,9 +93,16 @@ class Thread(QThread):
         Returns:
 
         """
+
         scheduleTime = self.df.iloc[i]["定时日期"] if self.df.iloc[i]["定时日期"] else None
-        upload_publish_video(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["文件夹路径"], "标题", scheduleTime,
-                             self.max_workers, signal=self.upload_signal, index=i)
+        print(f"文件夹路径:{self.df.iloc[i]['文件夹路径']}")
+        print(f'话题:{self.df.iloc[i]["话题设置"]}')
+        try:
+            upload_publish_video(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["文件夹路径"],
+                                 self.df.iloc[i]["话题设置"],
+                                 scheduleTime, self.max_workers, signal=self.upload_signal, index=i)
+        except Exception as e:
+            print("upload_publish_video报错:", e)
 
 
 class MainWindow(QMainWindow, Ui_MainWindow):
@@ -111,7 +122,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.df = pd.DataFrame()
         self.init_ui()
 
-    def finish(self):
+    def finish(self, i):
         """
         执行完成
         Returns:
@@ -136,7 +147,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         """
         count = data[1]
-        self.tableWidget.setItem(data[0], 7, QTableWidgetItem(str(count)))
+
+        self.tableWidget.setItem(data[0], 3, QTableWidgetItem(str(count)))
         self.df.at[data[0], "今日推荐数"] = count
 
     def update_table_delete_note(self, data: (int, int)):
@@ -158,11 +170,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         Returns:
 
         """
-        count = int(self.tableWidget.item(i, 5).text()) + 1
-        self.tableWidget.setItem(i, 5, QTableWidgetItem(str(count)))
-        self.df.at[i, "上传总数"] = count
-        self.df.at[i, "当前上传数"] = self.df.iloc[i]["当前上传数"] + 1
-        self.tableWidget.setItem(i, 6, QTableWidgetItem(str(self.df.iloc[i]["当前上传数"])))
+        try:
+            count = int(self.tableWidget.item(i, 5).text()) + 1
+            self.tableWidget.setItem(i, 5, QTableWidgetItem(str(count)))
+            self.df.at[i, "上传总数"] = count
+            self.df.at[i, "当前上传数"] = self.df.iloc[i]["当前上传数"] + 1
+            self.df.at[i, "文件总数"] = self.df.iloc[i]["文件总数"] - 1
+            self.tableWidget.setItem(i, 6, QTableWidgetItem(str(self.df.iloc[i]["当前上传数"])))
+            self.tableWidget.setItem(i, 9, QTableWidgetItem(str(self.df.iloc[i]["文件总数"])))
+        except Exception as e:
+            print(e)
 
     def update_table_cookie(self, i: int):
         """
@@ -179,15 +196,31 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.df = pd.read_sql("select appid,  user_name, cookies from user_data", conn)
         self.df['cookies_dict'] = self.df['cookies'].apply(json.loads)
         self.df['check'] = True
-        self.df['今日推荐数'] = '未查询'
+        self.df['今日推荐数'] = 0
         self.df['Cookie状态'] = '正常'
         self.df['上传总数'] = 0
         self.df['当前上传数'] = 0
-        self.df['话题设置'] = '每日一看'
-        self.df['删除不可推荐'] = ''
-        self.df['文件总数'] = ''
-        self.df['文件夹路径'] = ''
+        self.df['话题设置'] = ''
+        self.df['删除不可推荐'] = 0
+        self.df['文件总数'] = 0
+        self.df['文件夹路径'] = None
         self.df['定时日期'] = ''
+        if os.path.exists('data.csv'):
+            df = pd.read_csv('data.csv')
+            df['appid'] = df['appid'].astype(str)
+            for row in range(self.df.shape[0]):
+                appid = self.df.iloc[row]['appid']
+                if appid in df['appid'].tolist():
+                    matching_row = df[df['appid'] == appid].iloc[0]
+
+                    self.df.at[row, '今日推荐数'] = matching_row.get('今日推荐数', "未查询")
+                    self.df.at[row, '上传总数'] = matching_row.get('上传总数', 0)
+                    self.df.at[row, '当前上传数'] = matching_row.get('当前上传数', 0)
+                    self.df.at[row, '话题设置'] = matching_row.get('话题设置', 'python代做')
+                    self.df.at[row, '删除不可推荐'] = matching_row.get('删除不可推荐', 0)
+                    self.df.at[row, '文件总数'] = matching_row.get('文件总数', 0)
+                    self.df.at[row, '文件夹路径'] = matching_row.get('文件夹路径', None)
+
         self.show_table(self.df)
 
     def login(self):
@@ -229,23 +262,38 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.tableWidget.setItem(i, 4, QTableWidgetItem(str("正常")))
 
             # 第五列：上传总数
-            self.tableWidget.setItem(i, 5, QTableWidgetItem('0'))
+            self.tableWidget.setItem(i, 5, QTableWidgetItem(str(self.df.iloc[i]["上传总数"])))
 
             # 第六列：当前上传数
             self.tableWidget.setItem(i, 6, QTableWidgetItem('0'))
 
             # 第七列：话题
-            self.tableWidget.setItem(i, 7, QTableWidgetItem(str("话题")))
+            self.tableWidget.setItem(i, 7, QTableWidgetItem(str(self.df.iloc[i]["话题设置"])))
 
             # 第八列：删除不可推荐
             self.tableWidget.setItem(i, 8, QTableWidgetItem('0'))
 
             # 第九列：文件总数
             self.tableWidget.setItem(i, 9, QTableWidgetItem('0'))
+            if self.df.iloc[i]["文件夹路径"] is not None:
+                count = self.get_video_count(self.df.iloc[i]["文件夹路径"])
+
+                self.df.at[i, "文件总数"] = count
+                self.tableWidget.setItem(i, 9, QTableWidgetItem(str(count)))
+
             # 第10列：定时日期
             self.tableWidget.setItem(i, 10, QTableWidgetItem(''))
             # 第十一列：按钮
             button = QPushButton("绑定文件夹")
+            print(self.df.at[i, "文件总数"])
+            if self.df.iloc[i]["文件总数"] > 0:
+                button.setStyleSheet("""
+                background-color: rgb(90, 212, 105)
+                """)
+            else:
+                button.setStyleSheet("""
+                background-color: rgb(227, 61, 48)
+                """)
             button.clicked.connect(lambda checked, data=(appid, i): self.bind_folder(data))
             self.tableWidget.setCellWidget(i, 11, button)
 
@@ -265,25 +313,47 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             QMessageBox.information(self, "提示", "未选择文件夹")
             return
 
-        video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv'}
-
-        video_count = sum(1 for file in os.listdir(folder_path)
-                          if os.path.isfile(os.path.join(folder_path, file)) and os.path.splitext(file)[
-                              1].lower() in video_extensions)
+        video_count = self.get_video_count(folder_path)
+        if video_count>0:
+            button = self.sender()
+            button.setStyleSheet("""
+            background-color:rgb(78, 208, 94)""")
         print(video_count)
-        self.df.iloc[data[1]]["文件夹路径"] = folder_path
-        self.df.iloc[data[1]]["文件总数"] = video_count
-        self.update_video_count(data[1], video_count)
+        try:
+            self.df.at[data[1], "文件夹路径"] = folder_path
+            self.df.at[data[1], "文件总数"] = video_count
+            self.update_video_count(data[1], video_count)
+        except Exception as e:
+            print(e)
+
+    @staticmethod
+    def get_video_count(path: str) -> int:
+        video_count = 0
+        if os.path.exists(path):
+            video_extensions = {'.mp4'}
+
+            video_count = sum(1 for file in os.listdir(path)
+                              if os.path.isfile(os.path.join(path, file)) and os.path.splitext(file)[
+                                  1].lower() in video_extensions)
+
+        return video_count
 
     def update_video_count(self, row, count):
-        self.tableWidget.setItem(row, 9, QTableWidgetItem(str(count)))
+        try:
+            self.tableWidget.setItem(row, 9, QTableWidgetItem(str(count)))
+        except Exception as e:
+            print(e)
 
     def update_button(self):
-        self.pushButton.setEnabled(not self.thread.isRunning())
-        self.pushButton_2.setEnabled(not self.thread.isRunning())
-        self.pushButton_3.setEnabled(not self.thread.isRunning())
-        self.pushButton_4.setEnabled(not self.thread.isRunning())
-        self.pushButton_5.setEnabled(not self.thread.isRunning())
+        try:
+            # 直接取反 `self.thread.isRunning()` 的值
+            enabled = not self.thread.isRunning()
+
+            # 使用循环来批量设置按钮状态
+            for button in [self.pushButton, self.pushButton_2, self.pushButton_3, self.pushButton_4, self.pushButton_5]:
+                button.setEnabled(enabled)
+        except Exception as e:
+            print(e)
 
     def claim_task(self):
         logger.info("领取任务")
@@ -302,8 +372,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.thread.model = 1
         self.thread.df = self.get_df()
         self.thread.max_workers = int(self.lineEdit.text())
+
         self.thread.start()
-        self.update_button()
+        try:
+            self.update_button()
+        except Exception as e:
+            print(e)
 
     def get_today_recommendations(self):
         """
@@ -351,8 +425,15 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         return self.df
 
+    def closeEvent(self, a0):
+        self.df.to_csv("data.csv", index=False)
+
 
 if __name__ == '__main__':
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    allowed_dates = ['2024-12-13', '2024-12-14']
+    if current_date not in allowed_dates:
+        sys.exit(0)
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

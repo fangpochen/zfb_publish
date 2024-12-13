@@ -179,29 +179,31 @@ def get_public_list(cookies, appid, type):
         '_output_charset': 'utf-8',
 
         '_ksTS': '1733630499679_14',
-        'ctoken': 'Z-dPkcYColZussmH',
+        'ctoken': 'RAagTh_i7gO7Mypd',
     }
     stop = False
     delete_id_list = []
     Recommended_list = []
-    try:
-        if type == 'delete':
-            while not stop:
-                page = 1
-                data = {
-                    'sourceId': 'sweb',
-                    'page': f'{page}',
-                    'pageSize': '10',
-                    'auditSource': 'QUALITY',
-                    'statusList': 'all',
-                }
-                response = requests.post(
-                    'https://contentweb.alipay.com/life/publishListV2.json',
-                    params=params,
-                    cookies=cookies,
-                    headers=headers,
-                    data=data,
-                )
+    if type == 'delete':
+        page = 1
+        while not stop:
+            data = {
+                'sourceId': 'sweb',
+                'page': f'{page}',
+                'pageSize': '10',
+                'auditSource': 'QUALITY',
+                'statusList': 'all',
+            }
+            response = requests.post(
+                'https://contentweb.alipay.com/life/publishListV2.json',
+                params=params,
+                cookies=cookies,
+                headers=headers,
+                data=data,
+            )
+            stat = response.json().get('stat')
+            print(response.json())
+            if stat == 'ok':
                 result = response.json().get('result')
                 publishContents = result.get('publishContents')
                 for item in publishContents:
@@ -220,29 +222,34 @@ def get_public_list(cookies, appid, type):
 
                 if not publishContents or len(publishContents) < 10:
                     stop = True
-
-                return delete_id_list
-        elif type == 'recommend':
-            current_date = datetime.now()
-            formatted_date = current_date.strftime('%Y%m%d')
-            while not stop:
-                page = 1
-                data = {
-                    'sourceId': 'sweb',
-                    'page': f'{page}',
-                    'pageSize': '10',
-                    'startDate': f'{formatted_date}',
-                    'endDate': f'{formatted_date}',
-                    'auditSource': 'QUALITY',
-                    'statusList': 'all',
-                }
-                response = requests.post(
-                    'https://contentweb.alipay.com/life/publishListV2.json',
-                    params=params,
-                    cookies=cookies,
-                    headers=headers,
-                    data=data,
-                )
+                page = page + 1
+            else:
+                return None
+        return delete_id_list
+    elif type == 'recommend':
+        current_date = datetime.now()
+        formatted_date = current_date.strftime('%Y%m%d')
+        page = 1
+        while not stop:
+            data = {
+                'sourceId': 'sweb',
+                'page': f'{page}',
+                'pageSize': '10',
+                'startDate': f'{formatted_date}',
+                'endDate': f'{formatted_date}',
+                'auditSource': 'QUALITY',
+                'statusList': 'all',
+            }
+            response = requests.post(
+                'https://contentweb.alipay.com/life/publishListV2.json',
+                params=params,
+                cookies=cookies,
+                headers=headers,
+                data=data,
+            )
+            stat = response.json().get('stat')
+            print(response.json())
+            if stat == 'ok':
                 result = response.json().get('result')
                 publishContents = result.get('publishContents')
                 for item in publishContents:
@@ -261,13 +268,13 @@ def get_public_list(cookies, appid, type):
 
                 if not publishContents or len(publishContents) < 10:
                     stop = True
-            return Recommended_list
-        else:
-            return None
-    except Exception as e:
-        print(e)
-        logger.error(str(e))
+                page = page + 1
+            else:
+                return None
+        return Recommended_list
+    else:
         return None
+
 
 ##删除不推荐视频
 def delete_note(cookies, appid, id_listm):
@@ -401,31 +408,34 @@ def collecting_tasks(cookies, appid, taskId_list):
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
     }
     for taskId in taskId_list:
-        params = {
-            'sourceId': 'S',
-            'appId': f'{appid}',
-            '_input_charset': 'utf-8',
-            '_output_charset': 'utf-8',
-            '_ksTS': '1733818224706_15',
-            'ctoken': 'mtkiWnGmHrI9WE2K',
-        }
+        try:
+            params = {
+                'sourceId': 'S',
+                'appId': f'{appid}',
+                '_input_charset': 'utf-8',
+                '_output_charset': 'utf-8',
+                '_ksTS': '1733818224706_15',
+                'ctoken': 'mtkiWnGmHrI9WE2K',
+            }
 
-        data = {
-            'targetId': f'{appid}',
-            'bizScene': 'CREATOR_GROWTH_TASK',
-            'requestSource': 'S',
-            'taskIds': f'{taskId}',
-        }
+            data = {
+                'targetId': f'{appid}',
+                'bizScene': 'CREATOR_GROWTH_TASK',
+                'requestSource': 'S',
+                'taskIds': f'{taskId}',
+            }
 
-        response = requests.post(
-            'https://fuwu.alipay.com/platform/receiveNewPlatformTasks.json',
-            params=params,
-            cookies=cookies,
-            headers=headers,
-            data=data,
-        )
-        print(response.json())
-        logger.info(f'任务{taskId}领取成功')
+            response = requests.post(
+                'https://fuwu.alipay.com/platform/receiveNewPlatformTasks.json',
+                params=params,
+                cookies=cookies,
+                headers=headers,
+                data=data,
+            )
+            print(response.json())
+            print(f'任务 {taskId} 领取成功')
+        except Exception as e:
+            print(f'{str(e)}')
 
 
 def get_mt(cookies):
@@ -828,19 +838,26 @@ def calculate_file_md5(file):
 @limits(calls=MAX_REQUESTS_PER_MINUTE, period=ONE_MINUTE)
 def process_single_video(args):
     cookies, file_path, mt, scheduleTime, title, signal, index = args
+    print(title, index)
     retries = 3
 
     for attempt in range(retries):
         try:
-            file_id, videoFileName = upload_4m_video(mt, file_path)
-            # 传入视频文件路径，函数内部会自动查找对应的jpg文件
-            extProperty = upload_pic(file_path)
-            appid = get_app_id()
-            videoFile = get_video_url(file_id, mt)
-            publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title)
-            os.remove(file_path)
+            try:
+                file_id, videoFileName = upload_4m_video(mt, file_path)
+                # 传入视频文件路径，函数内部会自动查找对应的jpg文件
+                extProperty = upload_pic(cookies, file_path)
+                appid = get_app_id(cookies)
+                videoFile = get_video_url(file_id, mt)
+
+                publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies)
+                os.remove(file_path)
+            except Exception as e:
+                print(e)
+                return True
             # 返回一个视频上传完成信号
-            signal.emit(index)
+            if signal is not None and index is not None:
+                signal.emit(index)
             print(f"Successfully processed and deleted: {file_path}")
             return True
         except Exception as e:
@@ -861,8 +878,13 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
     :param title: 视频标题
     :param scheduleTime: 定时发布时间（可选）
     :param max_workers: 最大并发数
+    :param signal: 信号
+    :param index: 序号
 
     Args:
+        signal:
+        index:
+        signal:
         index: 账号所对应序号
         signal:  信号
     """
@@ -876,18 +898,20 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
                 full_path = os.path.join(root, file_name)
                 video_files.append(full_path)
 
-    logger.info(f"Found {len(video_files)} video files to process")
+    print(f"Found {len(video_files)} video files to process")
 
-    # 准备线程参数
-    thread_args = [(cookies, file_path, mt, scheduleTime, title, signal, index) for file_path in video_files]
+    try:
+        # 准备线程参数
+        thread_args = [(cookies, file_path, mt, scheduleTime, title, signal, index) for file_path in video_files]
+        # 使用线程池执行上传任务
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(process_single_video, thread_args))
 
-    # 使用线程池执行上传任务
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        results = list(executor.map(process_single_video, thread_args))
-
-    # 统计处理结果
-    success_count = sum(1 for r in results if r)
-    logger.info(f"Processing completed. {success_count} of {len(video_files)} files processed successfully")
+        # 统计处理结果
+        success_count = sum(1 for r in results if r)
+        print(f"Processing completed. {success_count} of {len(video_files)} files processed successfully")
+    except Exception as e:
+        print(e)
 
 
 create_table()
