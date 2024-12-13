@@ -2,37 +2,37 @@ import hashlib
 import json
 import os
 import secrets
-import sqlite3
 import time
 import urllib
 import concurrent.futures
-from datetime import datetime
-from logger import logger
 import requests
-from ratelimit import limits, sleep_and_retry
+import sqlite3
+from datetime import datetime
 from DrissionPage import ChromiumPage, ChromiumOptions
-
-# 限制每分钟最多处理2个视频
-ONE_MINUTE = 60
-MAX_REQUESTS_PER_MINUTE = 2
 
 
 def create_table():
-    conn = sqlite3.connect('data.db')
+    conn = sqlite3.connect('User_Data.db')
     cursor = conn.cursor()
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS user_data (
-        appid CHAR(64) PRIMARY KEY,
-        cookies TEXT,
-        user_name TEXT,
-        request_all TEXT
-    )
-    ''')
-    print("表格检查完成（已存在或成功创建）")
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_data';")
+    table_exists = cursor.fetchone()
+    if not table_exists:
+        cursor.execute('''
+        CREATE TABLE user_data (
+            appid CHAR(64) PRIMARY KEY,
+            cookies TEXT,
+            user_name TEXT,
+            request_all TEXT
+        )
+        ''')
+        print("表格创建成功")
+    else:
+        print("表格已存在")
     conn.commit()
     conn.close()
 
 
+# create_table()
 def get_appid(cookies):
     '''
 
@@ -74,7 +74,7 @@ def get_appid(cookies):
 
 # 登录
 def login():
-    conn = sqlite3.connect('data.db')
+    conn = sqlite3.connect('User_Data.db')
     cursor = conn.cursor()
     ''''
     return :返回cookie和保持cookie所用的请求数据data
@@ -98,14 +98,16 @@ def login():
         request_data['data'] = packet.request.postData
         all_request.append(request_data)
     page.quit()
-    cookies_json = json.dumps(cookies_dict)
     cursor.execute('''
     INSERT OR REPLACE INTO user_data (appid, cookies, user_name, request_all) 
     VALUES (?, ?, ?, ?)
-    ''', (appid, cookies_json, user_name, str(all_request)))
+    ''', (appid, str(cookies_dict), user_name, str(all_request)))
     conn.commit()
     conn.close()
     return cookies_dict, appid, user_name, all_request
+
+
+login()
 
 
 # 保持cookie
@@ -184,93 +186,89 @@ def get_public_list(cookies, appid, type):
     stop = False
     delete_id_list = []
     Recommended_list = []
-    try:
-        if type == 'delete':
-            while not stop:
-                page = 1
-                data = {
-                    'sourceId': 'sweb',
-                    'page': f'{page}',
-                    'pageSize': '10',
-                    'auditSource': 'QUALITY',
-                    'statusList': 'all',
-                }
-                response = requests.post(
-                    'https://contentweb.alipay.com/life/publishListV2.json',
-                    params=params,
-                    cookies=cookies,
-                    headers=headers,
-                    data=data,
-                )
-                result = response.json().get('result')
-                publishContents = result.get('publishContents')
-                for item in publishContents:
-                    rec_data = dict()
-                    state = item.get('state')
-                    if state == '已发布':
-                        canContentRecommended = item.get('canContentRecommended')
-                        if canContentRecommended == True:
-                            pass
-                            # rec_data['id']=item.get('contentId')
-                            # rec_data['title']=item.get('title')
-                            # Recommended_list.append(rec_data)
-                        else:
-                            contentId = item.get('contentId')
-                            delete_id_list.append(contentId)
+    if type == 'delete':
+        while not stop:
+            page = 1
+            data = {
+                'sourceId': 'sweb',
+                'page': f'{page}',
+                'pageSize': '10',
+                'auditSource': 'QUALITY',
+                'statusList': 'all',
+            }
+            response = requests.post(
+                'https://contentweb.alipay.com/life/publishListV2.json',
+                params=params,
+                cookies=cookies,
+                headers=headers,
+                data=data,
+            )
+            result = response.json().get('result')
+            publishContents = result.get('publishContents')
+            for item in publishContents:
+                rec_data = dict()
+                state = item.get('state')
+                if state == '已发布':
+                    canContentRecommended = item.get('canContentRecommended')
+                    if canContentRecommended == True:
+                        pass
+                        # rec_data['id']=item.get('contentId')
+                        # rec_data['title']=item.get('title')
+                        # Recommended_list.append(rec_data)
+                    else:
+                        contentId = item.get('contentId')
+                        delete_id_list.append(contentId)
 
-                if not publishContents or len(publishContents) < 10:
-                    stop = True
+            if not publishContents or len(publishContents) < 10:
+                stop = True
 
-                return delete_id_list
-        elif type == 'recommend':
-            current_date = datetime.now()
-            formatted_date = current_date.strftime('%Y%m%d')
-            while not stop:
-                page = 1
-                data = {
-                    'sourceId': 'sweb',
-                    'page': f'{page}',
-                    'pageSize': '10',
-                    'startDate': f'{formatted_date}',
-                    'endDate': f'{formatted_date}',
-                    'auditSource': 'QUALITY',
-                    'statusList': 'all',
-                }
-                response = requests.post(
-                    'https://contentweb.alipay.com/life/publishListV2.json',
-                    params=params,
-                    cookies=cookies,
-                    headers=headers,
-                    data=data,
-                )
-                result = response.json().get('result')
-                publishContents = result.get('publishContents')
-                for item in publishContents:
-                    rec_data = dict()
-                    state = item.get('state')
-                    if state == '已发布':
-                        canContentRecommended = item.get('canContentRecommended')
-                        if canContentRecommended == True:
-                            rec_data['id'] = item.get('contentId')
-                            rec_data['title'] = item.get('title')
-                            Recommended_list.append(rec_data)
-                        else:
-                            pass
-                            # contentId = item.get('contentId')
-                            # delete_id_list.append(contentId)
+            return delete_id_list
+    elif type == 'recommend':
+        current_date = datetime.now()
+        formatted_date = current_date.strftime('%Y%m%d')
+        while not stop:
+            page = 1
+            data = {
+                'sourceId': 'sweb',
+                'page': f'{page}',
+                'pageSize': '10',
+                'startDate': f'{formatted_date}',
+                'endDate': f'{formatted_date}',
+                'auditSource': 'QUALITY',
+                'statusList': 'all',
+            }
+            response = requests.post(
+                'https://contentweb.alipay.com/life/publishListV2.json',
+                params=params,
+                cookies=cookies,
+                headers=headers,
+                data=data,
+            )
+            result = response.json().get('result')
+            publishContents = result.get('publishContents')
+            for item in publishContents:
+                rec_data = dict()
+                state = item.get('state')
+                if state == '已发布':
+                    canContentRecommended = item.get('canContentRecommended')
+                    if canContentRecommended == True:
+                        rec_data['id'] = item.get('contentId')
+                        rec_data['title'] = item.get('title')
+                        Recommended_list.append(rec_data)
+                    else:
+                        pass
+                        # contentId = item.get('contentId')
+                        # delete_id_list.append(contentId)
 
-                if not publishContents or len(publishContents) < 10:
-                    stop = True
-            return Recommended_list
-        else:
-            return None
-    except Exception as e:
-        print(e)
-        logger.error(str(e))
+            if not publishContents or len(publishContents) < 10:
+                stop = True
+        return Recommended_list
+    else:
         return None
 
+
 ##删除不推荐视频
-def delete_note(cookies, appid, id_listm):
+def delete_note(cookies, id_listm, appid):
     '''
       :param cookies:传入cookies
       :param appid:用户的id
@@ -401,6 +399,7 @@ def collecting_tasks(cookies, appid, taskId_list):
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
     }
     for taskId in taskId_list:
+        print(appid)
         params = {
             'sourceId': 'S',
             'appId': f'{appid}',
@@ -425,7 +424,7 @@ def collecting_tasks(cookies, appid, taskId_list):
             data=data,
         )
         print(response.json())
-        logger.info(f'任务{taskId}领取成功')
+        print(f'任务{taskId}领取成功')
 
 
 def get_mt(cookies):
@@ -521,7 +520,7 @@ def upload_large_video(mt, file_path, file_size):
             'x-mass-appkey': 'apwallet',
             'x-mass-biztype': 'content_lifetab',
             'x-mass-cust-conf': '{"extern":{"isWaterMark":true}}',
-            'x-mass-file-length': str(file_size),
+            'x-mass-file-length': '9435271',
             'x-mass-file-md5': calculate_file_md5(file),
             'x-mass-file-multipart-slice-size': '4194304',
             'x-mass-filename': urllib.parse.quote(file.name),
@@ -576,7 +575,6 @@ def upload_large_video(mt, file_path, file_size):
             }
 
             response = requests.post('https://mass.alipay.com/file/multipart/upload/part', headers=headers, files=files)
-            print(str(len(part_data)))
             print(response.json())  # 打印响应信息，检查上传是否成功
 
     upload_complete(mt, file_id)
@@ -608,10 +606,8 @@ def upload_complete(mt, file_id):
     print(response.json())
 
 
-def upload_pic(cookies, video_file_path):
-    # 将视频文件路径的扩展名改为.jpg
-    pic_path = os.path.splitext(video_file_path)[0] + '.jpg'
-
+def upload_pic():
+    file_path = '充电器起火狗狗举动好棒狗子成精了.jpg'
     headers = {
         'accept': 'application/json',
         'accept-language': 'zh-CN,zh;q=0.9,en-GB;q=0.8,en;q=0.7,en-US;q=0.6',
@@ -629,35 +625,19 @@ def upload_pic(cookies, video_file_path):
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
     }
 
-    # 打开对应的图片文件
-    with open(pic_path, 'rb') as file:
+    # 打开文件
+    with open(file_path, 'rb') as file:
+        # 构建文件数据
         files = {
             'Filedata': (file.name, file, 'application/octet-stream'),
         }
 
-        response = requests.post('https://contentweb.alipay.com/life/uploadPicAjax.json',
-                                 cookies=cookies,
-                                 headers=headers,
-                                 files=files)
+        response = requests.post('https://contentweb.alipay.com/life/uploadPicAjax.json', cookies=cookies,
+                                 headers=headers, files=files)
         return json.loads(response.text).get('extProperty')
 
 
-def get_video_url(file_id, mt, max_retries=60, retry_interval=5):
-    """
-    获取视频URL,失败时在5分钟内每5秒重试一次
-    
-    Args:
-        file_id: 文件ID
-        mt: token
-        max_retries: 最大重试次数(60次=5分钟)
-        retry_interval: 重试间隔(秒)
-    
-    Returns:
-        str: 视频URL
-    
-    Raises:
-        Exception: 超过最大重试次数后仍失败
-    """
+def get_video_url(file_id, mt):
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9',
@@ -673,33 +653,14 @@ def get_video_url(file_id, mt, max_retries=60, retry_interval=5):
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     }
 
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(
-                f'https://mmtcapi.alipay.com/video/2.0/convert/query?fileId={file_id}&mt={mt}&bizKey=content_lifetab',
-                headers=headers,
-            )
-            data = json.loads(response.text).get('data', {})
-            trans_code = data.get('transCode', {})
-            convert_results = trans_code.get('convertResults', [])
-
-            if convert_results and convert_results[0].get('url'):
-                return convert_results[0].get('url')
-
-            print(f"Attempt {attempt + 1}: Video URL not ready yet, retrying in {retry_interval} seconds...")
-            time.sleep(retry_interval)
-
-        except Exception as e:
-            print(f"Attempt {attempt + 1} failed: {str(e)}")
-            if attempt < max_retries - 1:
-                time.sleep(retry_interval)
-            else:
-                raise Exception(f"Failed to get video URL after {max_retries} attempts")
-
-    raise Exception(f"Failed to get video URL after {max_retries} attempts")
+    response = requests.get(
+        f'https://mmtcapi.alipay.com/video/2.0/convert/query?fileId={file_id}&mt={mt}&bizKey=content_lifetab',
+        headers=headers,
+    )
+    return json.loads(response.text).get('data').get('transCode').get('convertResults')[0].get('url')
 
 
-def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies):
+def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, scheduleTime, title):
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9',
@@ -762,15 +723,12 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, s
             },
         ],
         'offerInfoList': [],
+        'scheduleTime': scheduleTime,
         'topicInfoVOList': [],
         'extInfo': {
             'coverSource': 'custom_settings',
         },
     }
-
-    # 只有当 scheduleTime 有值时才添加到 json_data
-    if scheduleTime:
-        json_data['scheduleTime'] = scheduleTime
 
     response = requests.post(
         'https://contentweb.alipay.com/life/publishShortVideo.json',
@@ -782,7 +740,7 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, s
     print(response.text)
 
 
-def get_app_id(cookies):
+def get_app_id():
     headers = {
         'accept': '*/*',
         'accept-language': 'zh-CN,zh;q=0.9',
@@ -824,27 +782,34 @@ def calculate_file_md5(file):
     return md5_hash.hexdigest()
 
 
+from ratelimit import limits, sleep_and_retry
+import time
+
+# 限制每分钟最多处理2个视频
+ONE_MINUTE = 60
+MAX_REQUESTS_PER_MINUTE = 2
+
+
 @sleep_and_retry
 @limits(calls=MAX_REQUESTS_PER_MINUTE, period=ONE_MINUTE)
 def process_single_video(args):
-    cookies, file_path, mt, scheduleTime, title, signal, index = args
-    retries = 3
+    cookies, file_path, mt, scheduleTime, title = args
+    retries = 3  # 最大重试次数
 
     for attempt in range(retries):
         try:
             file_id, videoFileName = upload_4m_video(mt, file_path)
-            # 传入视频文件路径，函数内部会自动查找对应的jpg文件
-            extProperty = upload_pic(file_path)
+            extProperty = upload_pic()
             appid = get_app_id()
+            time.sleep(10)
             videoFile = get_video_url(file_id, mt)
             publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title)
+            # 发布成功后删除视频文件
             os.remove(file_path)
-            # 返回一个视频上传完成信号
-            signal.emit(index)
             print(f"Successfully processed and deleted: {file_path}")
             return True
         except Exception as e:
-            if attempt < retries - 1:
+            if attempt < retries - 1:  # 如果还有重试机会
                 print(f"Attempt {attempt + 1} failed for {file_path}: {str(e)}")
                 time.sleep(5 * (attempt + 1))
                 continue
@@ -853,19 +818,8 @@ def process_single_video(args):
                 return False
 
 
-def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3, signal=None, index=None):
-    """
-    多线程处理视频上传
-    :param cookies: cookies信息
-    :param dir_path: 视频目录路径
-    :param title: 视频标题
-    :param scheduleTime: 定时发布时间（可选）
-    :param max_workers: 最大并发数
-
-    Args:
-        index: 账号所对应序号
-        signal:  信号
-    """
+def upload_publish_video(cookies, dir_path, title, scheduleTime, max_workers=3):
+    """多线程处理视频上传"""
     mt = get_mt(cookies)
     video_files = []
 
@@ -876,10 +830,10 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
                 full_path = os.path.join(root, file_name)
                 video_files.append(full_path)
 
-    logger.info(f"Found {len(video_files)} video files to process")
+    print(f"Found {len(video_files)} video files to process")
 
     # 准备线程参数
-    thread_args = [(cookies, file_path, mt, scheduleTime, title, signal, index) for file_path in video_files]
+    thread_args = [(cookies, file_path, mt, scheduleTime, title) for file_path in video_files]
 
     # 使用线程池执行上传任务
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -887,7 +841,43 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
 
     # 统计处理结果
     success_count = sum(1 for r in results if r)
-    logger.info(f"Processing completed. {success_count} of {len(video_files)} files processed successfully")
+    print(f"Processing completed. {success_count} of {len(video_files)} files processed successfully")
 
 
-create_table()
+if __name__ == '__main__':
+    cookies = {
+        'JSESSIONID': 'RZ55fkNuVDdcAXJGloIA2TSAsoK4SXauthRZ43GZ00',
+        'mobileSendTime': '-1',
+        'credibleMobileSendTime': '-1',
+        'ctuMobileSendTime': '-1',
+        'riskMobileBankSendTime': '-1',
+        'riskMobileAccoutSendTime': '-1',
+        'riskMobileCreditSendTime': '-1',
+        'riskCredibleMobileSendTime': '-1',
+        'riskOriginalAccountMobileSendTime': '-1',
+        'session.cookieNameId': 'ALIPAYJSESSIONID',
+        'cna': 'ova4H2k/PjoBASQOA3pmflO9',
+        'receive-cookie-deprecation': '1',
+        'tfstk': 'fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.',
+        'EXC_ANT_KEY': 'excashier_20001_FP_SENIOR_HJPGP11505070830582',
+        'CLUB_ALIPAY_COM': '2088442960985162',
+        'ali_apache_tracktmp': '"uid=2088442960985162"',
+        'ALI_PAMIR_SID': 'U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2',
+        '__TRACERT_COOKIE_bucUserId': '2088442960985162',
+        'userId': '2088442960985162',
+        'auth_goto_http_type': 'https',
+        'umt': 'HB52d13f5434598308f19d58a857c8a91c',
+        'ctoken': 'kuR774LM4a0zEiuw',
+        '_CHIPS-ctoken': 'kuR774LM4a0zEiuw',
+        'LoginForm': 'alipay_login_home',
+        'iw.userid': '"K1iSL120ipFvFLCnWp3Rzw=="',
+        'auth_jwt': 'e30.eyJleHAiOjE3MzM4NDA4Mjk3ODIsInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoieHNaRUZqNTI1Rm5maFZ1Z0ZIa2VMYXdGZzI0c2cvL3YxZDRiNmFzIiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9.MldCJpGyk2Ap9mbui5BpO80UoVAN9bkQ4_B-aKk18oc',
+        '_CHIPS-ALIPAYJSESSIONID': 'RZ55fkNuVDdcAXJGloIA2TSAsoK4SXauthGZ00RZ55',
+        'ALIPAYJSESSIONID': 'RZ55fkNuVDdcAXJGloIA2TSAsoK4SXauthRZ55GZ00',
+        'rtk': '0L2QuAPvdP8oO8aXXLxAotAAxG61QBqpaMkYNhgJGzYFQBIcGlP',
+        'zone': 'GZ00F',
+        'JSESSIONID': '46DD26910BFA152C3007113914D470E6',
+        'spanner': 'R7aw/GnSb5q1jDUC97hQRX4uGfBBQTb2Xt2T4qEYgj0=',
+    }
+    dir_path = "your/video/directory"
+    upload_publish_video(cookies, dir_path, max_workers=3)  # 设置3个线程并行处理

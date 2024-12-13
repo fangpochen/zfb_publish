@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1279</width>
+    <width>1544</width>
     <height>1012</height>
    </rect>
   </property>
@@ -37,6 +37,11 @@
       </column>
       <column>
        <property name="text">
+        <string>今日推荐数</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
         <string>Cookie状态</string>
        </property>
       </column>
@@ -63,6 +68,11 @@
       <column>
        <property name="text">
         <string>文件总数</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>定时日期</string>
        </property>
       </column>
       <column>
@@ -112,7 +122,11 @@
              </widget>
             </item>
             <item>
-             <widget class="QLineEdit" name="lineEdit"/>
+             <widget class="QLineEdit" name="lineEdit">
+              <property name="text">
+               <string>3</string>
+              </property>
+             </widget>
             </item>
            </layout>
           </item>
@@ -154,7 +168,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1279</width>
+     <width>1544</width>
      <height>26</height>
     </rect>
    </property>
