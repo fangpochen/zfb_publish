@@ -1,45 +1,88 @@
+import ast
 import os.path
 import sys
+import time
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QBrush, QColor
 from PyQt5.QtWidgets import QMainWindow, QApplication, QTableWidgetItem, QCheckBox, QHBoxLayout, QWidget, QPushButton, \
     QFileDialog, QMessageBox
 from ui.ui import Ui_MainWindow
-from logger import logger, QTextBrowserLogger
 from zfb import *
 import pandas as pd
+from db import update_existing_fields, delete_records_by_appids
 
 conn = sqlite3.connect('data.db')
 
 
 class Thread(QThread):
     df = pd.DataFrame()
-    model = 0  # 0领取任务 1是传视频 2是查询今日推荐 3是删除平台不推荐视频
-    max_workers = 50
+    model = 0  # 0领取任务 1是传视频 2是查询今日推荐 3是删除平台不推荐视频 4获取子账号
+    max_workers = 3
     error_signal = pyqtSignal(object)  # 返回异常，并设置cookies失效
 
     finish_signal = pyqtSignal(object)
     upload_signal = pyqtSignal(int)  # 但账号上传完成, 上传数量 +1, 参数为所在行序号-1
     recommend_signal = pyqtSignal(tuple)  # 更新界面推荐视频数量(账号序号, 推荐数量)
     delete_note_signal = pyqtSignal(tuple)  # 但删除不推荐视频(账号序号, 数量),+n
+    running = False
+    timing = None
+    web_timing = None
 
     def run(self):
+        self.running = True
         for i in range(self.df.shape[0]):
+            if not self.get_running():
+                break
             try:
                 if self.model == 0:
                     self.collecting_tasks(i)
 
                 elif self.model == 1:
+                    while True:
+                        if self.timing is not None:
+                            time_data = self.timing.split(":")
+                            current_time = datetime.now().strftime('%H:%M:%S').split(":")
+                            print(time_data, current_time)
+                            if int(time_data[0]) == int(current_time[0]) and int(time_data[1]) == int(
+                                    current_time[1]) and int(
+                                time_data[2]) == int(current_time[2]):
+                                break
+                            time.sleep(1)
+                        else:
+                            break
                     self.upload_publish_video(i)
                 elif self.model == 2:
                     self.get_public_list(i)
-                else:
+                elif self.model == 3:
                     self.delete_note(i)
+                elif self.model == 4:
+                    self.get_lifeOptionList(i)
             except Exception as e:
                 self.error_signal.emit(i)
 
         self.finish_signal.emit(None)
+        self.running = False
+
+    def get_lifeOptionList(self, i):
+        """
+        调用接口获取子账号
+        Args:
+            i:
+
+        Returns:
+
+        """
+        appid = self.df.iloc[i]["appid"]
+        cookies = self.df.iloc[i]["cookies_dict"]
+        get_lifeOptionList(cookies, appid)
+
+    def get_running(self):
+        return self.running
+
+    def stop(self):
+        self.running = False
+        logger.info("停止")
 
     def delete_note(self, i):
         """
@@ -94,33 +137,151 @@ class Thread(QThread):
 
         """
 
-        scheduleTime = self.df.iloc[i]["定时日期"] if self.df.iloc[i]["定时日期"] else None
-        print(f"文件夹路径:{self.df.iloc[i]['文件夹路径']}")
-        print(f'话题:{self.df.iloc[i]["话题设置"]}')
+        scheduleTime = self.web_timing
+        logger.info(f"文件夹路径:{self.df.iloc[i]['folder_path']}")
+        logger.info(f'话题:{self.df.iloc[i]["topic_settings"]}')
         try:
-            upload_publish_video(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["文件夹路径"],
-                                 self.df.iloc[i]["话题设置"],
-                                 scheduleTime, self.max_workers, signal=self.upload_signal, index=i)
+            upload_publish_video(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["folder_path"],
+                                 self.df.iloc[i]["topic_settings"],
+                                 scheduleTime, max_workers=self.max_workers, appid=self.df.iloc[i]["appid"], index=i,
+                                 max_uploads=self.df.iloc[i]["total_uploads"])
         except Exception as e:
-            print("upload_publish_video报错:", e)
+            logger.info(f"upload_publish_video报错:{e}")
 
 
 class MainWindow(QMainWindow, Ui_MainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
+        self.log_file_path = "log.log"
+        self.current_offset = 0
+        if os.path.exists(self.log_file_path):
+            self.current_offset = len(open(self.log_file_path, "r").readlines())
+
         self.setupUi(self)
         self.lineEdit.setText("3")
-        text_browser_handler = QTextBrowserLogger(self.textBrowser)
-        logger.addHandler(text_browser_handler)
         self.thread = Thread()
         self.thread.error_signal.connect(self.update_table_cookie)
         self.thread.finish_signal.connect(self.finish)
         self.thread.upload_signal.connect(self.update_table_upload)
         self.thread.recommend_signal.connect(self.update_table_recommend)
         self.thread.delete_note_signal.connect(self.update_table_delete_note)
+        self.pushButton_7.clicked.connect(self.set_tags)  # 绑定设置话题
+        self.pushButton_9.clicked.connect(self.set_upload_counts)  # 绑定设置上传数量
+        self.pushButton_6.clicked.connect(self.thread.stop)
+        self.pushButton_8.clicked.connect(self.clear_account)
+        self.pushButton_10.clicked.connect(self.get_lifeOptionList)
+
+        # 设置定时器
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_log)
+        self.timer.start(1000)  # 每隔 1 秒检查日志文件
+
+        self.timer_db = QTimer(self)
+        self.timer_db.timeout.connect(self.init_ui)
 
         self.df = pd.DataFrame()
         self.init_ui()
+
+        self.timer_login = QTimer(self)
+        self.timer_login.timeout.connect(self.request_all)
+        self.checkBox.stateChanged.connect(self.timer_login_start)
+        if self.checkBox.isChecked():
+            self.timer_login.start(300000)
+
+    def timer_login_start(self):
+        try:
+            if self.checkBox.isChecked():
+                self.timer_login.start(300000)
+            else:
+                self.timer_login.stop()
+        except Exception as e:
+            print("timer_login_start", e)
+
+    def request_all(self):
+        try:
+            df = self.get_df()
+            df = df[df["is_main_account"] == 1]
+            for i in range(df.shape[0]):
+                print(df.loc[i])
+                request_all = ast.literal_eval(df.loc[i, "request_all"])
+                keep_cookies(request_all)
+        except Exception as e:
+            print(e)
+
+    def get_lifeOptionList(self):
+        """
+        获取子账号
+        Returns:
+        """
+        try:
+            self.thread.model = 4
+            df = self.get_df()
+            df = df[df["is_main_account"] == 1]
+            self.thread.df = df
+            self.thread.start()
+            self.update_button()
+        except Exception as e:
+            print(e)
+
+    def clear_account(self):
+        data = self.get_check_row()
+        df = self.df.loc[data]
+        delete_records_by_appids(df)
+        self.init_ui()
+        QMessageBox.information(self, "完成", "账号已清除")
+
+    def update_log(self):
+        """更新日志内容到 QTextBrowser"""
+        try:
+            if not os.path.exists(self.log_file_path):
+                self.textBrowser.append(f"日志文件 {self.log_file_path} 不存在！")
+                self.timer.stop()
+                return
+
+            with open(self.log_file_path, "r", encoding="utf-8") as log_file:
+                log_file.seek(self.current_offset)  # 从上次读取的位置继续
+                new_lines = log_file.readlines()
+                self.current_offset = log_file.tell()  # 更新偏移量
+
+                # 将新内容追加到文本浏览器
+                for line in new_lines:
+                    if "INFO" not in line:
+                        continue
+                    self.textBrowser.append(line.strip())
+        except Exception as e:
+            print(e)
+
+    def set_upload_counts(self):
+        try:
+            data = self.get_check_row()
+            count = self.lineEdit_3.text()
+            try:
+                count = int(count)
+            except ValueError:
+                self.textBrowser.append("请输入有效的整数")
+                return
+            self.df.loc[data, "total_uploads"] = count
+            df = self.df.loc[data]
+            update_existing_fields(df)
+
+            for i in range(len(data)):
+                if data[i]:
+                    self.tableWidget.setItem(i, 5, QTableWidgetItem(str(count)))
+        except Exception as e:
+            print(e)
+
+    def set_tags(self):
+        try:
+            data = self.get_check_row()
+            tag = self.lineEdit_2.text()
+            self.df.loc[data, "topic_settings"] = tag
+            df = self.df.loc[data]
+            update_existing_fields(df)
+            for i in range(len(data)):
+                if data[i]:
+                    self.tableWidget.setItem(i, 7, QTableWidgetItem(tag))
+        except Exception as e:
+            print(e)
 
     def finish(self, i):
         """
@@ -136,6 +297,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if self.thread.model == 3:
             QMessageBox.information(self, "完成", "删除不推荐视频完成")
         self.update_button()
+        self.timer_db.stop()
+        self.init_ui()
 
     def update_table_recommend(self, data: (int, int)):
         """
@@ -173,11 +336,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         try:
             count = int(self.tableWidget.item(i, 5).text()) + 1
             self.tableWidget.setItem(i, 5, QTableWidgetItem(str(count)))
-            self.df.at[i, "上传总数"] = count
+            self.df.at[i, "total_uploads"] = count
             self.df.at[i, "当前上传数"] = self.df.iloc[i]["当前上传数"] + 1
-            self.df.at[i, "文件总数"] = self.df.iloc[i]["文件总数"] - 1
+            self.df.at[i, "total_files"] = self.df.iloc[i]["total_files"] - 1
             self.tableWidget.setItem(i, 6, QTableWidgetItem(str(self.df.iloc[i]["当前上传数"])))
-            self.tableWidget.setItem(i, 9, QTableWidgetItem(str(self.df.iloc[i]["文件总数"])))
+            self.tableWidget.setItem(i, 9, QTableWidgetItem(str(self.df.iloc[i]["total_files"])))
         except Exception as e:
             print(e)
 
@@ -193,34 +356,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.tableWidget.setItem(i, 4, item)
 
     def init_ui(self):
-        self.df = pd.read_sql("select appid,  user_name, cookies from user_data", conn)
+        self.df = pd.read_sql("select * from user_data", conn)
         self.df['cookies_dict'] = self.df['cookies'].apply(json.loads)
-        self.df['check'] = True
-        self.df['今日推荐数'] = 0
-        self.df['Cookie状态'] = '正常'
-        self.df['上传总数'] = 0
-        self.df['当前上传数'] = 0
-        self.df['话题设置'] = ''
-        self.df['删除不可推荐'] = 0
-        self.df['文件总数'] = 0
-        self.df['文件夹路径'] = None
-        self.df['定时日期'] = ''
-        if os.path.exists('data.csv'):
-            df = pd.read_csv('data.csv')
-            df['appid'] = df['appid'].astype(str)
-            for row in range(self.df.shape[0]):
-                appid = self.df.iloc[row]['appid']
-                if appid in df['appid'].tolist():
-                    matching_row = df[df['appid'] == appid].iloc[0]
-
-                    self.df.at[row, '今日推荐数'] = matching_row.get('今日推荐数', "未查询")
-                    self.df.at[row, '上传总数'] = matching_row.get('上传总数', 0)
-                    self.df.at[row, '当前上传数'] = matching_row.get('当前上传数', 0)
-                    self.df.at[row, '话题设置'] = matching_row.get('话题设置', 'python代做')
-                    self.df.at[row, '删除不可推荐'] = matching_row.get('删除不可推荐', 0)
-                    self.df.at[row, '文件总数'] = matching_row.get('文件总数', 0)
-                    self.df.at[row, '文件夹路径'] = matching_row.get('文件夹路径', None)
-
         self.show_table(self.df)
 
     def login(self):
@@ -239,54 +376,51 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         for i in range(df.shape[0]):
             # 第一列：复选框 + 序号
             checkbox = QCheckBox()
-            checkbox.setChecked(True)
+            checkbox.setChecked(df.iloc[i]["check_"])
             checkbox.setText(str(i + 1))
-            checkbox_widget = QWidget()
-            layout = QHBoxLayout(checkbox_widget)
-            layout.addWidget(checkbox)
-            layout.setAlignment(checkbox, Qt.AlignCenter)
-            layout.setContentsMargins(0, 0, 0, 0)
+
             appid = str(df.iloc[i, 0])  # 获取 appId
-            self.tableWidget.setCellWidget(i, 0, checkbox_widget)
+            self.tableWidget.setCellWidget(i, 0, checkbox)
             # self.tableWidget.setItem(i, 0, QTableWidgetItem(str(i + 1)))  # 显示序号
 
             # 第二列：appId
-            self.tableWidget.setItem(i, 1, QTableWidgetItem(str(df.iloc[i, 0])))
+            self.tableWidget.setItem(i, 1, QTableWidgetItem(str(df.iloc[i]["appid"])))
 
             # 第三列：账号名称
-            self.tableWidget.setItem(i, 2, QTableWidgetItem(str(df.iloc[i, 1])))
+            self.tableWidget.setItem(i, 2, QTableWidgetItem(df.iloc[i]["user_name"]))
 
             # 第四列：推荐数
-            self.tableWidget.setItem(i, 3, QTableWidgetItem(str("未查询")))
+            self.tableWidget.setItem(i, 3, QTableWidgetItem(str(self.df.iloc[i]["daily_recommendations"])))
             # 第四列：cookies状态
-            self.tableWidget.setItem(i, 4, QTableWidgetItem(str("正常")))
+            self.tableWidget.setItem(i, 4, QTableWidgetItem(self.df.iloc[i]["cookies_status"]))
 
-            # 第五列：上传总数
-            self.tableWidget.setItem(i, 5, QTableWidgetItem(str(self.df.iloc[i]["上传总数"])))
+            # 第五列：total_uploads
+            self.tableWidget.setItem(i, 5, QTableWidgetItem(str(self.df.iloc[i]["total_uploads"])))
 
             # 第六列：当前上传数
-            self.tableWidget.setItem(i, 6, QTableWidgetItem('0'))
+            self.tableWidget.setItem(i, 6, QTableWidgetItem(str(self.df.iloc[i]["current_uploads"])))
 
             # 第七列：话题
-            self.tableWidget.setItem(i, 7, QTableWidgetItem(str(self.df.iloc[i]["话题设置"])))
+            self.tableWidget.setItem(i, 7, QTableWidgetItem(str(self.df.iloc[i]["topic_settings"])))
 
             # 第八列：删除不可推荐
-            self.tableWidget.setItem(i, 8, QTableWidgetItem('0'))
+            self.tableWidget.setItem(i, 8, QTableWidgetItem(str(self.df.iloc[i]["delete_unrecommended"])))
 
             # 第九列：文件总数
-            self.tableWidget.setItem(i, 9, QTableWidgetItem('0'))
-            if self.df.iloc[i]["文件夹路径"] is not None:
-                count = self.get_video_count(self.df.iloc[i]["文件夹路径"])
+            self.tableWidget.setItem(i, 9, QTableWidgetItem(str(self.df.iloc[i]["total_files"])))
+            if self.df.iloc[i]["folder_path"] is not None:
+                count = self.get_video_count(self.df.iloc[i]["folder_path"])
 
-                self.df.at[i, "文件总数"] = count
+                self.df.at[i, "total_files"] = count
                 self.tableWidget.setItem(i, 9, QTableWidgetItem(str(count)))
 
-            # 第10列：定时日期
-            self.tableWidget.setItem(i, 10, QTableWidgetItem(''))
-            # 第十一列：按钮
+            self.tableWidget.setItem(i, 10, QTableWidgetItem("是" if self.df.iloc[i]["is_main_account"] else "否"))
+            # 第11列：绑定文件夹
+            self.tableWidget.setItem(i, 11, QTableWidgetItem(str(self.df.iloc[i]["folder_path"])))
+            # 第12列：按钮
             button = QPushButton("绑定文件夹")
-            print(self.df.at[i, "文件总数"])
-            if self.df.iloc[i]["文件总数"] > 0:
+            print(self.df.at[i, "total_files"])
+            if self.df.iloc[i]["total_files"] > 0:
                 button.setStyleSheet("""
                 background-color: rgb(90, 212, 105)
                 """)
@@ -295,7 +429,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 background-color: rgb(227, 61, 48)
                 """)
             button.clicked.connect(lambda checked, data=(appid, i): self.bind_folder(data))
-            self.tableWidget.setCellWidget(i, 11, button)
+            self.tableWidget.setCellWidget(i, 12, button)
 
     def bind_folder(self, data: (str, int)):
         """
@@ -314,17 +448,37 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             return
 
         video_count = self.get_video_count(folder_path)
-        if video_count>0:
+        if video_count > 0:
             button = self.sender()
             button.setStyleSheet("""
             background-color:rgb(78, 208, 94)""")
         print(video_count)
         try:
-            self.df.at[data[1], "文件夹路径"] = folder_path
-            self.df.at[data[1], "文件总数"] = video_count
+            self.df.at[data[1], "folder_path"] = folder_path
+            self.df.at[data[1], "total_files"] = video_count
+            appid = self.df.iloc[data[1]]["appid"]
+            df = self.df[self.df["appid"] == appid]
+            update_existing_fields(df)
+            self.init_ui()
             self.update_video_count(data[1], video_count)
         except Exception as e:
             print(e)
+
+    def get_check_row(self):
+        """
+        获取到选中的所有行
+        Returns:
+
+        """
+        row = self.tableWidget.rowCount()
+        data = []
+        for i in range(row):
+            cell_widget = self.tableWidget.cellWidget(i, 0)
+            print(type(cell_widget))
+            if isinstance(cell_widget, QCheckBox):
+                data.append(cell_widget.isChecked())
+        self.df["check_"] = data
+        return data
 
     @staticmethod
     def get_video_count(path: str) -> int:
@@ -352,6 +506,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             # 使用循环来批量设置按钮状态
             for button in [self.pushButton, self.pushButton_2, self.pushButton_3, self.pushButton_4, self.pushButton_5]:
                 button.setEnabled(enabled)
+            self.pushButton_6.setEnabled(self.thread.isRunning())
         except Exception as e:
             print(e)
 
@@ -360,6 +515,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.thread.model = 0
         self.thread.df = self.get_df()
         self.thread.start()
+        self.timer_db.start(1000)
         self.update_button()
 
     def start_upload(self):
@@ -370,10 +526,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         """
         logger.info("开始上传")
         self.thread.model = 1
+        if self.radioButton.isChecked():
+            self.thread.timing = self.timeEdit.text()
+            self.thread.web_timing = None
+        else:
+            self.thread.web_timing = self.dateTimeEdit.text()
+            self.thread.timing = None
         self.thread.df = self.get_df()
         self.thread.max_workers = int(self.lineEdit.text())
 
         self.thread.start()
+        self.timer_db.start(1000)
         try:
             self.update_button()
         except Exception as e:
@@ -389,6 +552,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.thread.model = 2
         self.thread.df = self.get_df()
         self.thread.start()
+        self.timer_db.start(1000)
         self.update_button()
 
     def delete_non_recommended_videos(self):
@@ -401,6 +565,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.thread.model = 3
         self.thread.df = self.get_df()
         self.thread.start()
+        self.timer_db.start(1000)
         self.update_button()
 
     def get_df(self):
@@ -413,20 +578,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             # 检查第 0 列是否包含 QCheckBox
             cell_widget = self.tableWidget.cellWidget(i, 0)
             if isinstance(cell_widget, QCheckBox):  # 判断是否为 QCheckBox
-                self.df.at[i, "check"] = cell_widget.isChecked()
+                self.df.at[i, "check_"] = cell_widget.isChecked()
 
-            # 更新话题设置列
+            # 更新topic_settings列
             topic_item = self.tableWidget.item(i, 7)
-            self.df.at[i, "话题设置"] = topic_item.text() if topic_item else None
+            self.df.at[i, "topic_settings"] = topic_item.text() if topic_item else None
 
-            # 更新定时日期列
-            date_item = self.tableWidget.item(i, 10)
-            self.df.at[i, "定时日期"] = date_item.text() if date_item and date_item.text() else None
+            # total_uploads列
+            count_item = self.tableWidget.item(i, 5)
+            self.df.at[i, "total_uploads"] = int(count_item.text()) if count_item else None
 
         return self.df
-
-    def closeEvent(self, a0):
-        self.df.to_csv("data.csv", index=False)
 
 
 if __name__ == '__main__':

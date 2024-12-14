@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1544</width>
+    <width>1670</width>
     <height>1012</height>
    </rect>
   </property>
@@ -15,11 +15,14 @@
   </property>
   <widget class="QWidget" name="centralwidget">
    <property name="styleSheet">
-    <string notr="true">QPushButton{height:41px;}QLineEdit{height:41px;}QComboBox{height:41px;}</string>
+    <string notr="true">QPushButton{height:41px;}QLineEdit{height:41px;}QComboBox{height:41px;}QLabel{font-size:11pt;}QRadioButton{font-size:11pt;}QDateTimeEdit{font-size:11pt;height:41px;}QTimeEdit{font-size:11pt;height:41px;}QCheckBox{font-size:11pt;height:41px;}</string>
    </property>
-   <layout class="QVBoxLayout" name="verticalLayout_2" stretch="1,0">
+   <layout class="QVBoxLayout" name="verticalLayout_4" stretch="1,0,0">
     <item>
      <widget class="QTableWidget" name="tableWidget">
+      <property name="dragEnabled">
+       <bool>true</bool>
+      </property>
       <column>
        <property name="text">
         <string>序号</string>
@@ -72,7 +75,12 @@
       </column>
       <column>
        <property name="text">
-        <string>定时日期</string>
+        <string>是否是主账号</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>文件夹路径</string>
        </property>
       </column>
       <column>
@@ -83,18 +91,204 @@
      </widget>
     </item>
     <item>
-     <layout class="QHBoxLayout" name="horizontalLayout_5" stretch="1,0">
+     <widget class="QTextBrowser" name="textBrowser"/>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="horizontalLayout_9">
       <item>
-       <widget class="QTextBrowser" name="textBrowser"/>
+       <spacer name="horizontalSpacer_4">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
       </item>
       <item>
-       <layout class="QVBoxLayout" name="verticalLayout">
+       <layout class="QVBoxLayout" name="verticalLayout_2">
         <item>
-         <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="1,1">
+         <layout class="QHBoxLayout" name="horizontalLayout_7">
+          <item>
+           <widget class="QLabel" name="label_3">
+            <property name="minimumSize">
+             <size>
+              <width>81</width>
+              <height>0</height>
+             </size>
+            </property>
+            <property name="text">
+             <string>话题:</string>
+            </property>
+            <property name="alignment">
+             <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="lineEdit_2"/>
+          </item>
+          <item>
+           <widget class="QPushButton" name="pushButton_7">
+            <property name="text">
+             <string>批量设置</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="pushButton_8">
+            <property name="text">
+             <string>清除账号</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="horizontalSpacer_2">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_8">
+          <item>
+           <widget class="QLabel" name="label_4">
+            <property name="text">
+             <string>上传总数:</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="lineEdit_3"/>
+          </item>
+          <item>
+           <widget class="QPushButton" name="pushButton_9">
+            <property name="text">
+             <string>批量设置</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="horizontalSpacer">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="QFrame" name="frame">
+          <property name="frameShape">
+           <enum>QFrame::StyledPanel</enum>
+          </property>
+          <property name="frameShadow">
+           <enum>QFrame::Raised</enum>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayout">
+           <item>
+            <widget class="QLabel" name="label_2">
+             <property name="text">
+              <string>设置定时发布</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayout_5">
+             <item>
+              <widget class="QRadioButton" name="radioButton">
+               <property name="text">
+                <string>软件定时发布时间每天:</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QTimeEdit" name="timeEdit">
+               <property name="currentSection">
+                <enum>QDateTimeEdit::HourSection</enum>
+               </property>
+               <property name="displayFormat">
+                <string>H:mm:ss</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayout_6">
+             <item>
+              <widget class="QRadioButton" name="radioButton_2">
+               <property name="text">
+                <string>Web定时发布时间:</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QDateTimeEdit" name="dateTimeEdit">
+               <property name="displayFormat">
+                <string>yyyy-M-d H:mm</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="Line" name="line">
+        <property name="orientation">
+         <enum>Qt::Vertical</enum>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QVBoxLayout" name="verticalLayout_3">
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="0,1,0,1">
+          <item>
+           <widget class="QCheckBox" name="checkBox">
+            <property name="text">
+             <string>是否保持登入</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
           <item>
            <widget class="QPushButton" name="pushButton">
             <property name="text">
              <string>登入</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="pushButton_10">
+            <property name="text">
+             <string>读取子账号</string>
             </property>
            </widget>
           </item>
@@ -108,7 +302,7 @@
          </layout>
         </item>
         <item>
-         <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="1,1">
+         <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="1,1,0">
           <property name="spacing">
            <number>0</number>
           </property>
@@ -134,6 +328,13 @@
            <widget class="QPushButton" name="pushButton_2">
             <property name="text">
              <string>开始上传</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="pushButton_6">
+            <property name="text">
+             <string>停止</string>
             </property>
            </widget>
           </item>
@@ -168,7 +369,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1544</width>
+     <width>1670</width>
      <height>26</height>
     </rect>
    </property>
