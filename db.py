@@ -36,7 +36,7 @@ def update_uploads_and_files(appid):
         cursor.execute(
             '''
             UPDATE user_data
-            SET total_uploads = total_uploads + 1,
+            SET 
                 current_uploads = current_uploads + 1,
                 total_files = total_files - 1
             WHERE appid = ?

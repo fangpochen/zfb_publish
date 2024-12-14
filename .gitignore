@@ -1,9 +1,12 @@
 data.db
 .vscode/
 videos/
+build/
+dist/
 .idea/
 批量发布.spec
 zfb2.py
 zfb1.py
 test/
 video/
+log.log

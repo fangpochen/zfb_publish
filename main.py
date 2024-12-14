@@ -155,7 +155,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.log_file_path = "log.log"
         self.current_offset = 0
         if os.path.exists(self.log_file_path):
-            self.current_offset = len(open(self.log_file_path, "r").readlines())
+            self.current_offset = len(open(self.log_file_path, "r", encoding="utf-8").readlines())
 
         self.setupUi(self)
         self.lineEdit.setText("3")
@@ -238,7 +238,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.timer.stop()
                 return
 
-            with open(self.log_file_path, "r", encoding="utf-8") as log_file:
+            with open(self.log_file_path, "r", encoding="utf-8-sig") as log_file:
                 log_file.seek(self.current_offset)  # 从上次读取的位置继续
                 new_lines = log_file.readlines()
                 self.current_offset = log_file.tell()  # 更新偏移量
@@ -532,7 +532,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         else:
             self.thread.web_timing = self.dateTimeEdit.text()
             self.thread.timing = None
-        self.thread.df = self.get_df()
+        df = self.get_df()
+        data = self.get_check_row()
+        df = df.loc[data]
+
+        self.thread.df = df
         self.thread.max_workers = int(self.lineEdit.text())
 
         self.thread.start()
@@ -582,7 +586,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
             # 更新topic_settings列
             topic_item = self.tableWidget.item(i, 7)
-            self.df.at[i, "topic_settings"] = topic_item.text() if topic_item else None
+            self.df.at[i, "topic_settings"] = topic_item.text()
 
             # total_uploads列
             count_item = self.tableWidget.item(i, 5)
@@ -593,7 +597,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
 if __name__ == '__main__':
     current_date = datetime.now().strftime('%Y-%m-%d')
-    allowed_dates = ['2024-12-13', '2024-12-14']
+    allowed_dates = ['2024-12-15', '2024-12-14']
     if current_date not in allowed_dates:
         sys.exit(0)
     app = QApplication(sys.argv)
