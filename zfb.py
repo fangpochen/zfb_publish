@@ -622,7 +622,7 @@ def upload_complete(mt, file_id):
 
 
 def upload_pic(cookies, video_file_path):
-    # 将视频文件路径的扩展名改为.jpg
+    # 将视频文件路径的扩展名��为.jpg
     pic_path = os.path.splitext(video_file_path)[0] + '.jpg'
 
     headers = {
@@ -741,7 +741,7 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, s
         'massToken': mt,
         'videoFile': videoFile,
         'videoFileName': videoFileName,
-        'title': videoFileName,
+        'title': os.path.splitext(os.path.basename(videoFileName))[0],
         'text': title,
         'canSmartCover': True,
         'canReply': True,
