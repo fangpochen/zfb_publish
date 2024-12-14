@@ -16,7 +16,7 @@ conn = sqlite3.connect('data.db')
 class Thread(QThread):
     df = pd.DataFrame()
     model = 0  # 0领取任务 1是传视频 2是查询今日推荐 3是删除平台不推荐视频
-    max_workers = 3
+    max_workers = 50
     error_signal = pyqtSignal(object)  # 返回异常，并设置cookies失效
 
     finish_signal = pyqtSignal(object)

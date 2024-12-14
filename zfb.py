@@ -1,12 +1,15 @@
 import hashlib
 import json
 import os
+from pathlib import Path
 import secrets
 import sqlite3
 import time
 import urllib
 import concurrent.futures
 from datetime import datetime
+
+import cv2
 from logger import logger
 import requests
 from ratelimit import limits, sleep_and_retry
@@ -738,8 +741,8 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, s
         'massToken': mt,
         'videoFile': videoFile,
         'videoFileName': videoFileName,
-        'title': title,
-        'text': '',
+        'title': videoFileName,
+        'text': title,
         'canSmartCover': True,
         'canReply': True,
         'canSelectReply': False,
@@ -834,43 +837,142 @@ def calculate_file_md5(file):
     return md5_hash.hexdigest()
 
 
-@sleep_and_retry
-@limits(calls=MAX_REQUESTS_PER_MINUTE, period=ONE_MINUTE)
+def create_cover_from_video(video_path, output_path=None):
+    try:
+        video_path = video_path.replace('\\', '/')
+        
+        if not os.path.exists(video_path):
+            print(f"视频文件不存在: {video_path}")
+            return None
+            
+        if output_path is None:
+            output_dir = os.path.dirname(video_path)
+            base_name = os.path.splitext(os.path.basename(video_path))[0]
+            output_path = f"{output_dir}/{base_name}.jpg"
+            
+        output_path = output_path.replace('\\', '/')
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        print(f"视频路径: {video_path}")
+        print(f"封面输出路径: {output_path}")
+            
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"无法打开视频文件: {video_path}")
+            return None
+            
+        try:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                print(f"无法读取视频第一帧: {video_path}")
+                return None
+                
+            print(f"Frame shape: {frame.shape}")
+            print(f"Frame type: {frame.dtype}")
+            
+            # BGR 转 RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # 使用 PIL 保存图片
+            from PIL import Image
+            img = Image.fromarray(frame_rgb)
+            
+            try:
+                img.save(output_path, "JPEG", quality=95)
+                print(f"使用PIL保存图片成功: {output_path}")
+                
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    return output_path
+                else:
+                    print(f"图片文件创建失败或大小为0: {output_path}")
+                    return None
+                    
+            except Exception as e:
+                print(f"PIL保存图片失败: {str(e)}")
+                return None
+                
+        finally:
+            cap.release()
+            
+    except Exception as e:
+        print(f"创建封面图过程发生异常: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        return None
+
+
 def process_single_video(args):
     cookies, file_path, mt, scheduleTime, title, signal, index = args
-    print(title, index)
+    video_name = os.path.basename(file_path)
+    print(f"开始处理视频: {video_name}")
+    
+    # 设置默认封面图路径
+    default_cover = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_cover.jpg")
+    
     retries = 3
-
     for attempt in range(retries):
         try:
+            # 上传视频前先生成封面图
+            print(f"正在生成视频封面 - {video_name}")
+            cover_path = create_cover_from_video(file_path)
+            
+            if not cover_path or not os.path.exists(cover_path):
+                print(f"无法生成视频封面，将使用默认封面 - {video_name}")
+                if os.path.exists(default_cover):
+                    cover_path = default_cover
+                else:
+                    print("默认封面图不存在，跳过此视频")
+                    return False
+            
+            # 继续处理其他步骤...
+            print(f"开始上传视频文件 - {video_name}")
+            file_id, videoFileName = upload_4m_video(mt, file_path)
+            
+            print(f"开始上传封面图 - {video_name}")
             try:
-                file_id, videoFileName = upload_4m_video(mt, file_path)
-                # 传入视频文件路径，函数内部会自动查找对应的jpg文件
-                extProperty = upload_pic(cookies, file_path)
-                appid = get_app_id(cookies)
-                videoFile = get_video_url(file_id, mt)
-
-                publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies)
-                os.remove(file_path)
+                extProperty = upload_pic(cookies, cover_path)
             except Exception as e:
-                print(e)
-                return True
-            # 返回一个视频上传完成信号
+                print(f"封面图上传失败 - {video_name}: {str(e)}")
+                # 如果封面上传失败，可以继续尝试使用默认封面
+                extProperty = upload_pic(cookies, "default_cover.jpg")
+            
+            appid = get_app_id(cookies)
+            print(f"获取视频URL - {video_name}")
+            videoFile = get_video_url(file_id, mt)
+
+            print(f"发布视频内容 - {video_name}")
+            publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies)
+            
+            # 清理文件
+            os.remove(file_path)
+            cover_path = os.path.splitext(file_path)[0] + '.jpg'
+            if os.path.exists(cover_path):
+                os.remove(cover_path)
+                print(f"清理临时文件完成 - {video_name}")
+            
             if signal is not None and index is not None:
                 signal.emit(index)
-            print(f"Successfully processed and deleted: {file_path}")
+                
+            print(f"视频处理成功 - {video_name}")
             return True
+            
         except Exception as e:
+            print(f"视频处理失败 - {video_name}: {str(e)}")
             if attempt < retries - 1:
-                print(f"Attempt {attempt + 1} failed for {file_path}: {str(e)}")
+                print(f"等待重试 - {video_name}")
                 time.sleep(5 * (attempt + 1))
                 continue
-            else:
-                print(f"All attempts failed for {file_path}: {str(e)}")
-                return False
+            return False
+        finally:
+            # 清理临时文件
+            try:
+                if os.path.exists(cover_path) and cover_path != "default_cover.jpg":
+                    os.remove(cover_path)
+            except Exception as e:
+                print(f"清理封面图失败 - {video_name}: {str(e)}")
 
 
-def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3, signal=None, index=None):
+def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3, signal=None, index=None, max_uploads=None):
     """
     多线程处理视频上传
     :param cookies: cookies信息
@@ -880,38 +982,63 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
     :param max_workers: 最大并发数
     :param signal: 信号
     :param index: 序号
-
-    Args:
-        signal:
-        index:
-        signal:
-        index: 账号所对应序号
-        signal:  信号
+    :param max_uploads: 最大上传数量限制（可选）
     """
-    mt = get_mt(cookies)
-    video_files = []
-
-    # 收集所有视频文件路径
-    for root, _, files in os.walk(dir_path):
-        for file_name in files:
-            if file_name.endswith('.mp4'):
-                full_path = os.path.join(root, file_name)
-                video_files.append(full_path)
-
-    print(f"Found {len(video_files)} video files to process")
-
+    print(f"开始处理视频上传任务 - 目录: {dir_path}")
+    print(f"上传参数 - 最大并发数: {max_workers}, 最大上传数: {max_uploads or '不限'}")
+    
     try:
+        mt = get_mt(cookies)
+        print("成功获取上传token")
+        video_files = []
+
+        # 收集所有视频文件路径
+        for root, _, files in os.walk(dir_path):
+            for file_name in files:
+                if file_name.endswith('.mp4'):
+                    full_path = os.path.join(root, file_name)
+                    video_files.append(full_path)
+
+        total_videos = len(video_files)
+        print(f"找到 {total_videos} 个视频文件")
+
+        # 如果设置了上传数量限制，则只取指定数量的视频
+        if max_uploads is not None:
+            video_files = video_files[:max_uploads]
+            print(f"根据限制，将处理 {len(video_files)} 个视频")
+
+        if not video_files:
+            print("没有找到可处理的视频文件")
+            return
+
         # 准备线程参数
         thread_args = [(cookies, file_path, mt, scheduleTime, title, signal, index) for file_path in video_files]
+        
         # 使用线程池执行上传任务
+        print(f"开始并发上传，并发数: {max_workers}")
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(process_single_video, thread_args))
+            future_to_file = {executor.submit(process_single_video, args): args[1] for args in thread_args}
+            
+            completed = 0
+            for future in concurrent.futures.as_completed(future_to_file):
+                file_path = future_to_file[future]
+                try:
+                    success = future.result()
+                    completed += 1
+                    if success:
+                        print(f"视频处理成功 ({completed}/{len(video_files)}) - {os.path.basename(file_path)}")
+                    else:
+                        print(f"视频处理失败 ({completed}/{len(video_files)}) - {os.path.basename(file_path)}")
+                except Exception as e:
+                    print(f"视频处理异常 - {os.path.basename(file_path)}: {str(e)}")
 
-        # 统计处理结果
-        success_count = sum(1 for r in results if r)
-        print(f"Processing completed. {success_count} of {len(video_files)} files processed successfully")
+        # 统计最终结果
+        success_count = sum(1 for r in [f.result() for f in future_to_file.keys()] if r)
+        print(f"任务完成 - 成功: {success_count}, 失败: {len(video_files) - success_count}")
+
     except Exception as e:
-        print(e)
+        print(f"上传任务发生错误: {str(e)}")
+        raise
 
 
 create_table()
