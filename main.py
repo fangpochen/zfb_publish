@@ -402,7 +402,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             checkbox = QCheckBox()
             checkbox.setChecked(df.iloc[i]["check_"])
             checkbox.setText(str(i + 1))
-
+            checkbox.stateChanged.connect(self.get_check_row)
             appid = str(df.iloc[i, 0])  # 获取 appId
             self.tableWidget.setCellWidget(i, 0, checkbox)
             # self.tableWidget.setItem(i, 0, QTableWidgetItem(str(i + 1)))  # 显示序号
@@ -501,6 +501,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             if isinstance(cell_widget, QCheckBox):
                 data.append(cell_widget.isChecked())
         self.df["check_"] = data
+        update_existing_fields(self.df)
         return data
 
     @staticmethod
