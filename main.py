@@ -96,8 +96,10 @@ class Thread(QThread):
         logger.info(str(self.df.iloc[i]["cookies_dict"]))
         logger.info(str(self.df.iloc[i]["appid"]))
         id_listm = get_public_list(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], "delete",
-                                   self.df.iloc[i]["is_sun_account"], self.df.iloc[i]["mian_account_appid"])
-        delete_note(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], id_listm)
+                                   not self.df.iloc[i]["is_main_account"], self.df.iloc[i]["mian_account_appid"])
+        print(id_listm)
+        delete_note(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], id_listm,
+                not self.df.iloc[i]["is_main_account"], self.df.iloc[i]["mian_account_appid"])
         self.delete_note_signal.emit((i, len(id_listm)))
 
     def get_public_list(self, i):
@@ -110,8 +112,11 @@ class Thread(QThread):
 
         """
         print(f"获取第{i}个账号推荐")
-        get_public_list(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], "recommend",
-                        self.df.iloc[i]["is_sun_account"], self.df.iloc[i]["mian_account_appid"])
+        try:
+            get_public_list(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], "recommend",
+                            not self.df.iloc[i]["is_main_account"], self.df.iloc[i]["mian_account_appid"])
+        except Exception as e:
+            print("账号推荐异常:", e)
         print(f"获取第{i}个账号推荐完成")
 
     def collecting_tasks(self, i):
@@ -438,7 +443,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.tableWidget.setItem(i, 11, QTableWidgetItem(str(self.df.iloc[i]["folder_path"])))
             # 第12列：按钮
             button = QPushButton("绑定文件夹")
-            print(self.df.at[i, "total_files"])
             if self.df.iloc[i]["total_files"] > 0:
                 button.setStyleSheet("""
                 background-color: rgb(90, 212, 105)
@@ -634,7 +638,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
 if __name__ == '__main__':
     current_date = datetime.now().strftime('%Y-%m-%d')
-    allowed_dates = ['2024-12-15', '2024-12-14']
+    allowed_dates = ['2024-12-16', '2024-12-14']
     if current_date not in allowed_dates:
         sys.exit(0)
     app = QApplication(sys.argv)
