@@ -10,3 +10,6 @@ zfb1.py
 test/
 video/
 log.log
+*.log
+*.ipynb
+*.txt

@@ -20,7 +20,6 @@ class Thread(QThread):
     model = 0  # 0领取任务 1是传视频 2是查询今日推荐 3是删除平台不推荐视频 4获取子账号
     max_workers = 3
     error_signal = pyqtSignal(object)  # 返回异常，并设置cookies失效
-
     finish_signal = pyqtSignal(object)
     upload_signal = pyqtSignal(int)  # 但账号上传完成, 上传数量 +1, 参数为所在行序号-1
     recommend_signal = pyqtSignal(tuple)  # 更新界面推荐视频数量(账号序号, 推荐数量)
@@ -93,6 +92,8 @@ class Thread(QThread):
         Returns:
 
         """
+        logger.info(str(self.df.iloc[i]["cookies_dict"]))
+        logger.info(str(self.df.iloc[i]["appid"]))
         id_listm = get_public_list(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], "delete")
         delete_note(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], id_listm)
         self.delete_note_signal.emit((i, len(id_listm)))
@@ -140,11 +141,16 @@ class Thread(QThread):
         scheduleTime = self.web_timing
         logger.info(f"文件夹路径:{self.df.iloc[i]['folder_path']}")
         logger.info(f'话题:{self.df.iloc[i]["topic_settings"]}')
+        logger.info(f'线程数:{self.max_workers}')
+        logger.info("cookies:" + str(self.df.iloc[i]["cookies_dict"]))
+        logger.info("appid:" + str(self.df.iloc[i]["appid"]))
         try:
+            pass
             upload_publish_video(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["folder_path"],
                                  self.df.iloc[i]["topic_settings"],
                                  scheduleTime, max_workers=self.max_workers, appid=self.df.iloc[i]["appid"], index=i,
                                  max_uploads=self.df.iloc[i]["total_uploads"])
+
         except Exception as e:
             logger.info(f"upload_publish_video报错:{e}")
 
@@ -167,9 +173,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.thread.delete_note_signal.connect(self.update_table_delete_note)
         self.pushButton_7.clicked.connect(self.set_tags)  # 绑定设置话题
         self.pushButton_9.clicked.connect(self.set_upload_counts)  # 绑定设置上传数量
-        self.pushButton_6.clicked.connect(self.thread.stop)
+        self.pushButton_6.clicked.connect(self.thread_stop)
         self.pushButton_8.clicked.connect(self.clear_account)
         self.pushButton_10.clicked.connect(self.get_lifeOptionList)
+        self.pushButton_11.clicked.connect(lambda: self.all_check(True))
+        self.pushButton_12.clicked.connect(lambda: self.all_check(False))
 
         # 设置定时器
         self.timer = QTimer(self)
@@ -187,6 +195,18 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.checkBox.stateChanged.connect(self.timer_login_start)
         if self.checkBox.isChecked():
             self.timer_login.start(300000)
+
+    def all_check(self, status):
+        try:
+            for i in range(self.tableWidget.rowCount()):
+                cell_widget = self.tableWidget.cellWidget(i, 0)
+                cell_widget.setChecked(status)
+        except Exception as e:
+            print(e)
+
+    def thread_stop(self):
+        self.thread.stop()
+        self.update_button()
 
     def timer_login_start(self):
         try:
@@ -217,6 +237,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.thread.model = 4
             df = self.get_df()
             df = df[df["is_main_account"] == 1]
+            data = self.get_df()
+            df = df.loc[data]
             self.thread.df = df
             self.thread.start()
             self.update_button()
@@ -245,8 +267,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
                 # 将新内容追加到文本浏览器
                 for line in new_lines:
-                    if "INFO" not in line:
-                        continue
                     self.textBrowser.append(line.strip())
         except Exception as e:
             print(e)
@@ -513,7 +533,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def claim_task(self):
         logger.info("领取任务")
         self.thread.model = 0
-        self.thread.df = self.get_df()
+        df = self.get_df()
+        data = self.get_check_row()
+        df = df.loc[data]
+        update_existing_fields(df)
+        self.thread.df = df
         self.thread.start()
         self.timer_db.start(1000)
         self.update_button()
@@ -529,13 +553,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if self.radioButton.isChecked():
             self.thread.timing = self.timeEdit.text()
             self.thread.web_timing = None
-        else:
+        elif self.radioButton_2.isChecked():
             self.thread.web_timing = self.dateTimeEdit.text()
+            self.thread.timing = None
+        else:
+            self.thread.web_timing = None
             self.thread.timing = None
         df = self.get_df()
         data = self.get_check_row()
         df = df.loc[data]
-
+        update_existing_fields(df)
         self.thread.df = df
         self.thread.max_workers = int(self.lineEdit.text())
 
@@ -554,7 +581,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         """
         logger.info("查询今日推荐")
         self.thread.model = 2
-        self.thread.df = self.get_df()
+        df = self.get_df()
+        data = self.get_check_row()
+        df = df.loc[data]
+        update_existing_fields(df)
+        self.thread.df = df
         self.thread.start()
         self.timer_db.start(1000)
         self.update_button()
@@ -565,12 +596,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         Returns:
 
         """
-        logger.info("删除平台不推荐的视频")
-        self.thread.model = 3
-        self.thread.df = self.get_df()
-        self.thread.start()
-        self.timer_db.start(1000)
-        self.update_button()
+        try:
+            logger.info("删除平台不推荐的视频")
+            self.thread.model = 3
+            df = self.get_df()
+            data = self.get_check_row()
+            df = df.loc[data]
+            update_existing_fields(df)
+            self.thread.df = df
+            self.thread.start()
+            self.timer_db.start(1000)
+            self.update_button()
+        except Exception as e:
+            print(e)
 
     def get_df(self):
         """

@@ -221,7 +221,7 @@ def get_sub_cookies(cookies, appid):
     return cookies
 
 
-#获取子账号
+# 获取子账号
 def get_lifeOptionList(cookies, appid):
     '''
       :param cookies: 传入主账号cookie，主账号appid
@@ -492,8 +492,10 @@ def get_public_list(cookies, appid, type):
                     headers=headers,
                     data=data,
                 )
-                stat = response.json().get('stat')
                 logger.debug(response.json())
+                print(response.json())
+                stat = response.json().get('stat')
+
                 if stat == 'ok':
                     result = response.json().get('result')
                     publishContents = result.get('publishContents')
@@ -690,6 +692,7 @@ def collecting_tasks(cookies, appid, taskId_list):
         except Exception as e:
             logger.info(f'{str(e)}')
             logger.info(f'{appid}领取失败')
+
 
 def get_mt(cookies):
     headers = {
