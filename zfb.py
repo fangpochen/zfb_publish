@@ -95,7 +95,8 @@ def create_table():
             folder_path TEXT DEFAULT NULL,       
             is_main_account INTEGER DEFAULT 1,   
             user_name TEXT,                      
-            request_all TEXT                     
+            request_all TEXT,
+            mian_account_appid CHAR(64)                 
         )
     ''')
     logger.info("表格检查完成（已存在或成功创建）")
@@ -188,6 +189,16 @@ def login():
 
 
 def get_sub_cookies(cookies, appid):
+    '''
+
+    Args:
+        cookies:目前账号cookie
+        appid: 需要换成的appid账号
+
+    Returns:
+        更新后的cookie
+    '''
+    res_cookie = cookies
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en-GB;q=0.8,en;q=0.7,en-US;q=0.6',
@@ -217,8 +228,8 @@ def get_sub_cookies(cookies, appid):
         headers=headers,
     )
     for cookie in response.cookies:
-        cookies[cookie.name] = cookie.value
-    return cookies
+        res_cookie[cookie.name] = cookie.value
+    return res_cookie
 
 
 # 获取子账号
@@ -255,6 +266,7 @@ def get_lifeOptionList(cookies, appid):
                                  cookies=cookies,
                                  headers=headers)
         json_data = response.json()
+        print(json_data)
         stat = json_data.get('stat')
         operator_list = []
         if stat == 'ok':
@@ -262,17 +274,20 @@ def get_lifeOptionList(cookies, appid):
             for ope in list:
                 operator = dict()
                 operator['appId'] = ope.get('appId')
-                operator['appName'] = ope.get('appName')
-                operator['cookies'] = get_sub_cookies(cookies, operator['appId'])
-                # logger.info(operator)
-                operator_list.append(operator)
-                cursor.execute('''
-                    INSERT INTO user_data (appid, cookies, user_name, is_main_account)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(appid) DO UPDATE SET
-                        cookies = excluded.cookies
-                    ''', (operator['appId'], json.dumps(operator['cookies']), operator['appName'], 0))
-                conn.commit()
+                if operator['appId'] == appid:
+                    pass
+                else:
+                    operator['appName'] = ope.get('appName')
+                    # operator['cookies'] = get_sub_cookies(cookies, operator['appId'])
+                    operator_list.append(operator)
+                    cookies = json.dumps(cookies)
+                    cursor.execute('''
+                        INSERT INTO user_data (appid, cookies, user_name, is_main_account,mian_account_appid)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(appid) DO UPDATE SET
+                            cookies = excluded.cookies
+                        ''', (operator['appId'], cookies, operator['appName'], 0, appid))
+                    conn.commit()
             conn.close()
             logger.info(f'{appid}获取子账号成功')
             return operator_list
@@ -385,14 +400,20 @@ def keep_cookies(request_all):
 
 # get_appid(cookies)
 # 获取视频列表
-def get_public_list(cookies, appid, type):
+def get_public_list(cookie, appid, type, is_sun_account, mian_account_appid):
     '''
     :param cookies:传入cookies
     :param appid:用户的id
     :param type:使用类型，传入'delete'是获取需要删除的视频列表，传入recommend为获取当日推荐视频列表
+    :param is_sun_account:布尔值或者0/1，判断是否为子账号，为子账号则为True
+    :param mian_account_appid:所属主账号的appid
     :return:
     返回需要删除的视频id，或者推荐视频id
     '''
+    if is_sun_account:
+        cookies = get_sub_cookies(cookie, appid)
+    else:
+        cookies = cookie
     headers = {
         'accept': 'application/json',
         'accept-language': 'zh-CN,zh;q=0.9,en-GB;q=0.8,en;q=0.7,en-US;q=0.6',
@@ -421,6 +442,8 @@ def get_public_list(cookies, appid, type):
         '_ksTS': '1733630499679_14',
         'ctoken': 'RAagTh_i7gO7Mypd',
     }
+    conn = sqlite3.connect('data.db')
+    cursor = conn.cursor()
     stop = False
     delete_id_list = []
     Recommended_list = []
@@ -469,6 +492,24 @@ def get_public_list(cookies, appid, type):
             except Exception as e:
                 logger.info(f'{appid}获取删除视频列表失败：{e}')
                 return None
+        cursor.execute('''
+                                        INSERT INTO user_data (appid,delete_unrecommended)
+                                        VALUES (?,?)
+                                        ON CONFLICT(appid) DO UPDATE SET
+                                            cookies = excluded.cookies
+                                        ''', (appid, len(delete_id_list)))
+        conn.commit()
+        # conn.close()
+        if is_sun_account:
+            cookies = get_sub_cookies(cookies, mian_account_appid)
+            cursor.execute('''
+                INSERT INTO user_data (appid, cookies)
+                VALUES (?, ?)
+                ON CONFLICT(appid) DO UPDATE SET
+                    cookies = excluded.cookies
+            ''', (mian_account_appid, cookies))
+            conn.commit()
+        conn.close()
         return delete_id_list
     elif type == 'recommend':
         current_date = datetime.now()
@@ -520,12 +561,29 @@ def get_public_list(cookies, appid, type):
                     return None
             except Exception as e:
                 logger.info(f'{appid}获取推荐视频列表失败：{e}')
+        cursor.execute('''
+                                INSERT INTO user_data (appid,daily_recommendations)
+                                VALUES (?,?)
+                                ON CONFLICT(appid) DO UPDATE SET
+                                    cookies = excluded.cookies
+                                ''', (appid, len(Recommended_list)))
+        conn.commit()
+        if is_sun_account:
+            cookies = get_sub_cookies(cookies, mian_account_appid)
+            cursor.execute('''
+                       INSERT INTO user_data (appid, cookies)
+                       VALUES (?, ?)
+                       ON CONFLICT(appid) DO UPDATE SET
+                           cookies = excluded.cookies
+                   ''', (mian_account_appid, cookies))
+            conn.commit()
+        conn.close()
         return Recommended_list
     else:
         return None
 
 
-##删除不推荐视频
+# 删除不推荐视频
 def delete_note(cookies, appid, id_listm):
     '''
       :param cookies:传入cookies

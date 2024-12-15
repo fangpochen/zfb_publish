@@ -52,6 +52,7 @@ class Thread(QThread):
                             break
                     self.upload_publish_video(i)
                 elif self.model == 2:
+                    print(f"开始查询今日推荐{i}")
                     self.get_public_list(i)
                 elif self.model == 3:
                     self.delete_note(i)
@@ -94,7 +95,8 @@ class Thread(QThread):
         """
         logger.info(str(self.df.iloc[i]["cookies_dict"]))
         logger.info(str(self.df.iloc[i]["appid"]))
-        id_listm = get_public_list(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], "delete")
+        id_listm = get_public_list(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], "delete",
+                                   self.df.iloc[i]["is_sun_account"], self.df.iloc[i]["mian_account_appid"])
         delete_note(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], id_listm)
         self.delete_note_signal.emit((i, len(id_listm)))
 
@@ -107,14 +109,10 @@ class Thread(QThread):
         Returns:
 
         """
-        recommended_list = get_public_list(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], "recommend")
-        if recommended_list is None:
-            return None
-        content = f"账号:{self.df.iloc[i]['user_name']}推荐视频id如下:" + "\n    ".join(
-            [i[['title']] for i in recommended_list])
-
-        self.recommend_signal.emit((i, len(recommended_list)))
-        print(content)
+        print(f"获取第{i}个账号推荐")
+        get_public_list(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], "recommend",
+                        self.df.iloc[i]["is_sun_account"], self.df.iloc[i]["mian_account_appid"])
+        print(f"获取第{i}个账号推荐完成")
 
     def collecting_tasks(self, i):
         """
@@ -236,14 +234,15 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         try:
             self.thread.model = 4
             df = self.get_df()
-            df = df[df["is_main_account"] == 1]
-            data = self.get_df()
+            df = df.loc[df["is_main_account"] == 1]
+            data = self.get_check_row()
             df = df.loc[data]
+            update_existing_fields(df)
             self.thread.df = df
             self.thread.start()
             self.update_button()
         except Exception as e:
-            print(e)
+            print("get_lifeOptionList:", e)
 
     def clear_account(self):
         data = self.get_check_row()
