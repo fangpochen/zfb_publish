@@ -269,7 +269,6 @@ def get_lifeOptionList(cookies, appid):
         print(json_data)
         stat = json_data.get('stat')
         operator_list = []
-        cookies = json.dumps(cookies)
         if stat == 'ok':
             list = json_data.get('result')
             for ope in list:
@@ -279,14 +278,14 @@ def get_lifeOptionList(cookies, appid):
                     pass
                 else:
                     operator['appName'] = ope.get('appName')
-                    # operator['cookies'] = get_sub_cookies(cookies, operator['appId'])
+                    operator['cookies'] = get_sub_cookies(cookies, operator['appId'])
                     operator_list.append(operator)
                     cursor.execute('''
                         INSERT INTO user_data (appid, cookies, user_name, is_main_account,mian_account_appid)
                         VALUES (?, ?, ?, ?, ?)
                         ON CONFLICT(appid) DO UPDATE SET
                             cookies = excluded.cookies
-                        ''', (operator['appId'], cookies, operator['appName'], 0, appid))
+                        ''', (operator['appId'], json.dumps(cookies), operator['appName'], 0, appid))
                     conn.commit()
             conn.close()
             logger.info(f'{appid}获取子账号成功')
@@ -808,40 +807,41 @@ def get_traid():
 
 
 def upload_4m_video(mt, file_path):
-    # 获取文件大小（字节数）
-    file_size = os.path.getsize(file_path)
-
-    # 4MB = 4 * 1024 * 1024 字节
-    max_size = 4 * 1024 * 1024  # 4MB
-
-    if file_size > max_size:
-        return upload_large_video(mt, file_path, file_size)
-    # 打开文件
-    with open(file_path, 'rb') as file:
-        # 构建文件数据
-        files = {
-            'file': (file.name, file, 'video/mp4')  # 'file' 是表单字段名，file.name 是文件名，'video/mp4' 是文件的 MIME 类型
-        }
-
-        # 构建请求头
-        headers = {
-            'Accept': '*/*',
-            'Accept-Language': 'zh-CN,zh;q=0.9',
-            'Origin': 'https://c.alipay.com',
-            'Referer': 'https://c.alipay.com/',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'X-Mass-Appkey': 'apwallet',
-            'X-Mass-Biztype': 'content_lifetab',
-            'X-Mass-Cust-Conf': '{"extern":{"isWaterMark":true}}',
-            'X-Mass-Token': mt,  # 请替换成你的实际 token
-            'Connection': 'keep-alive'
-        }
-
-        # 发送 POST 请求
-        url = f'https://mass.alipay.com/file/auth/upload?mt={mt}&bz=content_lifetab&public=false'
-        response = requests.post(url, headers=headers, files=files)
-        file_id = json.loads(response.text).get('data').get('id')
-        return file_id, file.name
+    try:
+        # 获取文件大小
+        file_size = os.path.getsize(file_path)
+        # 如果文件大于4M，直接使用大文件上传方法
+        if file_size > 4 * 1024 * 1024:  # 4MB
+            return upload_large_video(mt, file_path, file_size)
+            
+        # 上传视频文件
+        with open(file_path, 'rb') as file:
+            files = {
+                'file': (os.path.basename(file_path), file, 'application/octet-stream')
+            }
+            
+            params = {
+                'mt': mt,
+                'bz': 'content_lifetab',
+                'public': 'false'
+            }
+            
+            response = requests.post(
+                'https://mass.alipay.com/file/auth/upload',
+                params=params,
+                files=files
+            )
+            
+            # 只修改这一行，使用str()将json()返回的字典转换为字符串
+            logger.info('上传小于4m视频返回：' + str(response.text))
+            
+            response_data = json.loads(response.text)
+            file_id = response_data['data'].get('id')
+            return file_id, file.name
+                
+    except Exception as e:
+        logger.error(f"视频上传失败: {str(e)}", exc_info=True)
+        raise
 
 
 def upload_large_video(mt, file_path, file_size):
@@ -923,8 +923,7 @@ def upload_large_video(mt, file_path, file_size):
             }
 
             response = requests.post('https://mass.alipay.com/file/multipart/upload/part', headers=headers, files=files)
-            logger.info(str(len(part_data)))
-            logger.info(response.json())  # 打印响应信息，检查上传是否成功
+            logger.info('上传分块视频返回：'+response.json())  # 打印响应信息，检查上传是否成功
 
     upload_complete(mt, file_id)
     return file_id, file.name
@@ -952,7 +951,7 @@ def upload_complete(mt, file_id):
     }
 
     response = requests.post('https://mass.alipay.com/file/multipart/upload/complete', headers=headers)
-    logger.info(response.json())
+    logger.info('上传分块视频完成返回：'+response.json())
 
 
 def upload_pic(cookies, video_file_path):
@@ -1187,8 +1186,8 @@ def create_cover_from_video(video_path, output_path=None):
         output_path = output_path.replace('\\', '/')
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        logger.info(f"视频路径: {video_path}")
-        logger.info(f"封面输出路径: {output_path}")
+        # logger.info(f"视频路径: {video_path}")
+        # logger.info(f"封面输出路径: {output_path}")
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -1213,8 +1212,6 @@ def create_cover_from_video(video_path, output_path=None):
 
             try:
                 img.save(output_path, "JPEG", quality=95)
-                logger.info(f"使用PIL保存图片成功: {output_path}")
-
                 if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                     return output_path
                 else:
@@ -1236,7 +1233,7 @@ def create_cover_from_video(video_path, output_path=None):
 
 
 def process_single_video(args):
-    cookies, file_path, mt, scheduleTime, title, appid, index = args
+    cookies, file_path, mt, scheduleTime, title, appid = args
     video_name = os.path.basename(file_path)
     logger.info(f"开始处理视频: {video_name}")
 
@@ -1258,52 +1255,30 @@ def process_single_video(args):
                     logger.info("默认封面图不存在，跳过此视频")
                     return False
 
-            # 继续处理其他步骤...
-            logger.info(f"开始上传视频文件 - {video_name}")
+            # 上传视频
             file_id, videoFileName = upload_4m_video(mt, file_path)
-
-            logger.info(f"开始上传封面图 - {video_name}")
-            try:
-                extProperty = upload_pic(cookies, cover_path)
-            except Exception as e:
-                logger.info(f"封面图上传失败 - {video_name}: {str(e)}")
-                # 如果封面上传失败，可以继续尝试使用默认封面
-                extProperty = upload_pic(cookies, "default_cover.jpg")
-
-            appid = get_app_id(cookies)
-            logger.info(f"获取视频URL - {video_name}")
+            extProperty = upload_pic(cookies, cover_path)
             videoFile = get_video_url(file_id, mt)
 
-            logger.info(f"发布视频内容 - {video_name}")
             publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies)
-
+            
             # 清理文件
             os.remove(file_path)
-            cover_path = os.path.splitext(file_path)[0] + '.jpg'
-            if os.path.exists(cover_path):
+            if os.path.exists(cover_path) and cover_path != default_cover:
                 os.remove(cover_path)
-                logger.info(f"清理临时文件完成 - {video_name}")
 
             if appid:
                 update_uploads_and_files(appid)
-
+                
             logger.info(f"视频处理成功 - {video_name}")
             return True
 
         except Exception as e:
-            logger.info(f"视频处理失败 - {video_name}: {str(e)}")
+            logger.error(f"视频处理失败 - {video_name}: {str(e)}", exc_info=True)
             if attempt < retries - 1:
-                logger.info(f"等待重试 - {video_name}")
                 time.sleep(5 * (attempt + 1))
                 continue
             return False
-        finally:
-            # 清理临时文件
-            try:
-                if os.path.exists(cover_path) and cover_path != "default_cover.jpg":
-                    os.remove(cover_path)
-            except Exception as e:
-                logger.info(f"清理封面图失败 - {video_name}: {str(e)}")
 
 
 def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3, appid=None, index=None,
@@ -1347,7 +1322,7 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
             return
 
         # 准备线程参数
-        thread_args = [(cookies, file_path, mt, scheduleTime, title, appid, index) for file_path in video_files]
+        thread_args = [(cookies, file_path, mt, scheduleTime, title, appid) for file_path in video_files]
 
         # 使用线程池执行上传任务
         logger.info(f"开始并发上传，并发数: {max_workers}")
@@ -1377,3 +1352,38 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
 
 
 create_table()
+
+# if __name__ == '__main__':
+#     cookies = {
+#         'JSESSIONID': 'RZ55Xs2XjpT7lkRCMRH0coaptT1QAjauthRZ55GZ00',
+#         'mobileSendTime': '-1',
+#         'credibleMobileSendTime': '-1',
+#         'ctuMobileSendTime': '-1',
+#         'riskMobileBankSendTime': '-1',
+#         'riskMobileAccoutSendTime': '-1',
+#         'riskMobileCreditSendTime': '-1',
+#         'riskCredibleMobileSendTime': '-1',
+#         'riskOriginalAccountMobileSendTime': '-1',
+#         'session.cookieNameId': 'ALIPAYJSESSIONID',
+#         'cna': 'ova4H2k/PjoBASQOA3pmflO9',
+#         'receive-cookie-deprecation': '1',
+#         'tfstk': 'fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.',
+#         'EXC_ANT_KEY': 'excashier_20001_FP_SENIOR_HJPGP11505070830582',
+#         'userId': '2088442960985162',
+#         'CLUB_ALIPAY_COM': '2088212888256550',
+#         'ali_apache_tracktmp': '"uid=2088212888256550"',
+#         'ALI_PAMIR_SID': 'U55k3YfKTtGZmtVpuxTx2kehDU1#Iixoa00QTtqEWZycJAyloDU1',
+#         'iw.userid': '"K1iSL1vhasuVZ3Ls4+CB+A=="',
+#         'ctoken': 'cwnid7vYNWh4k08C',
+#         '_CHIPS-ctoken': 'cwnid7vYNWh4k08C',
+#         'LoginForm': 'alipay_login_home',
+#         'auth_jwt': 'e30.eyJleHAiOjE3MzQzNTU1MjU1ODcsInJsIjoiNSwwLDI3LDE5LDI4LDMwLDEzLDEwIiwic2N0IjoiNVlFWXhkMHlRUUlvd1dYSFEyZUgvbWlGZzJHSHVUeXI2MjhmMDdrIiwidWlkIjoiMjA4ODIxMjg4ODI1NjU1MCJ9.YmxRQNdRDLPD61wD9CdwnWQcHOQrBBrrsSJihAYfKKk',
+#         'rtk': '5Dh5Fpk3XYqM2WXaaDjpMm3ncN2JleCAXoi6uf/3+76UlewK+Qd',
+#         '_CHIPS-ALIPAYJSESSIONID': 'RZ55Xs2XjpT7lkRCMRH0coaptT1QAjauthRZ55GZ00',
+#         '__TRACERT_COOKIE_bucUserId': '2088442960985162',
+#         'JSESSIONID': 'DAE57874622B248818EFA0A42C475899',
+#         'spanner': '7acogoGPX08qTDN+BMhdT4dctyLrypRz4EJoL7C0n0A=',
+#         'zone': 'GZ00F',
+#         'ALIPAYJSESSIONID': 'RZ55Xs2XjpT7lkRCMRH0coaptT1QAjauthRZ55GZ00',
+#     }
+#     upload_publish_video(cookies,'video/','test')
