@@ -156,7 +156,7 @@ def login():
     page = ChromiumPage(co)
     page.set.cookies.clear()
     page.get('https://c.alipay.com/page/content-creation/publish/short-video?appId=2030095407214168')
-    page.wait.url_change('https://c.alipay.com/page/content-creation/publish/short-video?appId=2030086492507825')
+    page.wait.url_change('https://c.alipay.com/page/content-creation/publish/short-video?appId=2030086492507825',timeout=15)
     page.listen.start('dwcookie?biztype=pcwallet')
     for i in range(3):
         try:
@@ -269,6 +269,7 @@ def get_lifeOptionList(cookies, appid):
         print(json_data)
         stat = json_data.get('stat')
         operator_list = []
+        cookies = json.dumps(cookies)
         if stat == 'ok':
             list = json_data.get('result')
             for ope in list:
@@ -285,7 +286,7 @@ def get_lifeOptionList(cookies, appid):
                         VALUES (?, ?, ?, ?, ?)
                         ON CONFLICT(appid) DO UPDATE SET
                             cookies = excluded.cookies
-                        ''', (operator['appId'], json.dumps(cookies), operator['appName'], 0, appid))
+                        ''', (operator['appId'], cookies, operator['appName'], 0, appid))
                     conn.commit()
             conn.close()
             logger.info(f'{appid}获取子账号成功')
@@ -467,6 +468,7 @@ def get_public_list(cookie, appid, type, is_sun_account, mian_account_appid):
                 )
                 stat = response.json().get('stat')
                 logger.debug(response.json())
+                print(response.json())
                 if stat == 'ok':
                     result = response.json().get('result')
                     publishContents = result.get('publishContents')
@@ -482,6 +484,7 @@ def get_public_list(cookie, appid, type, is_sun_account, mian_account_appid):
                                 # Recommended_list.append(rec_data)
                             else:
                                 contentId = item.get('contentId')
+                                print('contentId:',contentId)
                                 delete_id_list.append(contentId)
 
                     if not publishContents or len(publishContents) < 10:
@@ -495,13 +498,18 @@ def get_public_list(cookie, appid, type, is_sun_account, mian_account_appid):
         # conn.close()
         if is_sun_account:
             cookies = get_sub_cookies(cookies, mian_account_appid)
-            cursor.execute('''
-                            UPDATE user_data
-                            SET cookies = ?
-                            WHERE appid = ?
-                        ''', (cookies, mian_account_appid))
-            conn.commit()
+            cookies=json.dumps(cookies)
+            try:
+                cursor.execute('''
+                                UPDATE user_data
+                                SET cookies = ?
+                                WHERE appid = ?
+                            ''', (cookies, mian_account_appid))
+                conn.commit()
+            except Exception as e:
+                print(e)
         conn.close()
+        print('delete_id_list1',delete_id_list)
         return delete_id_list
     elif type == 'recommend':
 
@@ -630,6 +638,7 @@ def delete_note(cookie, appid, id_listm,is_sun_account, mian_account_appid):
             )
             logger.info(response.json())
             logger.info(f'{appid}-视频{note_id}已删除')
+            print(f'{appid}-视频{note_id}已删除')
         except Exception as e:
             logger.info(f'{appid}-视频{note_id}删除失败：{e}')
     cursor.execute('''
