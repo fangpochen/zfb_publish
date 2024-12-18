@@ -6,7 +6,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QBrush, QColor, QPainter, QFont
+from PyQt5.QtGui import QBrush, QColor, QPainter, QFont, QIcon
 from PyQt5.QtWidgets import QMainWindow, QApplication, QTableWidgetItem, QCheckBox, QHBoxLayout, QWidget, QPushButton, \
     QFileDialog, QMessageBox
 from ui.ui import Ui_MainWindow
@@ -14,6 +14,7 @@ from zfb import *
 import pandas as pd
 from db import update_existing_fields, delete_records_by_appids
 from datetime import datetime
+from key_validator import check_saved_key, verify_key
 
 conn = sqlite3.connect('data.db')
 
@@ -203,6 +204,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.timer_login.start(300000)
 
         # self.tableWidget.paintEvent = self.paintEvent_tabel
+
+        # 设置窗口图标
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
 
     def paintEvent_tabel(self, event):
         super().paintEvent(event)
@@ -663,10 +669,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
 
 if __name__ == '__main__':
+    # 验证秘钥
+    if not check_saved_key():
+        if not verify_key():
+            sys.exit(1)
+    
     current_date = datetime.now().strftime('%Y-%m-%d')
-    expiry_date = '2025-01-01'  # 设置到2025��1月1日
+    expiry_date = '2025-01-01'  # 设置到2025年1月1日
     if current_date >= expiry_date:
         sys.exit(0)
+        
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

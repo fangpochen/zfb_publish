@@ -1178,12 +1178,8 @@ def create_cover_from_video(video_path, output_path=None):
             # 使用 PIL 处理图片
             from PIL import Image
             img = Image.fromarray(frame_rgb)
-
-            # 调整图片尺寸为支付宝推荐的比例 (16:9)
-            target_width = 1280
-            target_height = 720
-            img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
-
+            
+            # 直接保存原始分辨率,不做尺寸调整
             try:
                 img.save(output_path, "JPEG", quality=95)
                 logger.info(f"使用PIL保存图片成功: {output_path}")
