@@ -202,18 +202,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if self.checkBox.isChecked():
             self.timer_login.start(300000)
 
-        self.tableWidget.paintEvent = self.paintEvent_tabel
+        # self.tableWidget.paintEvent = self.paintEvent_tabel
 
     def paintEvent_tabel(self, event):
         super().paintEvent(event)
         painter = QPainter(self.tableWidget.viewport())
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setFont(QFont("Arial", 50))
-        painter.setPen(QColor(30, 31, 34,128))
+        painter.setPen(QColor(30, 31, 34, 128))
         text = "仅供学习使用"
         text_rect = painter.fontMetrics().boundingRect(text)
-        x = (self.tableWidget.viewport().width() - text_rect.width()) / 2
-        y = (self.tableWidget.viewport().height() - text_rect.height()) / 2
+        
+        # 将浮点数转换为整数
+        x = int((self.tableWidget.viewport().width() - text_rect.width()) / 2)
+        y = int((self.tableWidget.viewport().height() - text_rect.height()) / 2)
+        
         painter.drawText(x, y + text_rect.height(), text)
         painter.end()
 
@@ -661,7 +664,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
 if __name__ == '__main__':
     current_date = datetime.now().strftime('%Y-%m-%d')
-    expiry_date = '2025-01-01'  # 设置到2025年1月1日
+    expiry_date = '2025-01-01'  # 设置到2025��1月1日
     if current_date >= expiry_date:
         sys.exit(0)
     app = QApplication(sys.argv)
