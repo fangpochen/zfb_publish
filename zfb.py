@@ -1157,17 +1157,32 @@ def create_cover_from_video(video_path, output_path=None):
             return None
 
         try:
+            # 获取视频的FPS
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            if fps <= 0:
+                logger.info(f"无法获取视频FPS，使用默认值30")
+                fps = 30
+                
+            # 设置读取第一秒的最后一帧
+            frame_position = int(fps)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_position)
+            
             ret, frame = cap.read()
             if not ret or frame is None:
-                logger.info(f"无法读���视频第一帧: {video_path}")
+                logger.info(f"无法读取指定帧: {video_path}")
                 return None
 
             # BGR 转 RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            # 使用 PIL 保存图片
+            # 使用 PIL 处理图片
             from PIL import Image
             img = Image.fromarray(frame_rgb)
+
+            # 调整图片尺寸为支付宝推荐的比例 (16:9)
+            target_width = 1280
+            target_height = 720
+            img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
 
             try:
                 img.save(output_path, "JPEG", quality=95)
