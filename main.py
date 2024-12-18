@@ -11,6 +11,7 @@ from ui.ui import Ui_MainWindow
 from zfb import *
 import pandas as pd
 from db import update_existing_fields, delete_records_by_appids
+from datetime import datetime
 
 conn = sqlite3.connect('data.db')
 
@@ -18,7 +19,7 @@ conn = sqlite3.connect('data.db')
 class Thread(QThread):
     df = pd.DataFrame()
     model = 0  # 0领取任务 1是传视频 2是查询今日推荐 3是删除平台不推荐视频 4获取子账号
-    max_workers = 3
+    max_workers = 50
     error_signal = pyqtSignal(object)  # 返回异常，并设置cookies失效
     finish_signal = pyqtSignal(object)
     upload_signal = pyqtSignal(int)  # 但账号上传完成, 上传数量 +1, 参数为所在行序号-1
@@ -167,7 +168,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.current_offset = len(open(self.log_file_path, "r", encoding="utf-8").readlines())
 
         self.setupUi(self)
-        self.lineEdit.setText("3")
+        self.lineEdit.setText("50")
         self.thread = Thread()
         self.thread.error_signal.connect(self.update_table_cookie)
         self.thread.finish_signal.connect(self.finish)
@@ -639,8 +640,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
 if __name__ == '__main__':
     current_date = datetime.now().strftime('%Y-%m-%d')
-    allowed_dates = ['2024-12-16', '2024-12-14']
-    if current_date not in allowed_dates:
+    expiry_date = '2025-01-01'  # 设置到2025年1月1日
+    if current_date >= expiry_date:
         sys.exit(0)
     app = QApplication(sys.argv)
     window = MainWindow()

@@ -96,10 +96,8 @@ def update_existing_fields(df: pd.DataFrame, db_path='data.db', table_name='user
             cursor.execute(sql, list(update_fields.values()) + [appid])
 
         conn.commit()  # 提交事务
-        print("数据更新成功！")
     except Exception as e:
         conn.rollback()  # 发生错误时回滚
-        print(f"更新过程中发生错误：{e}")
     finally:
         conn.close()  # 关闭数据库连接
 

@@ -116,6 +116,27 @@
          </layout>
         </item>
         <item>
+         <widget class="QPushButton" name="pushButton_3">
+          <property name="text">
+           <string>领取任务</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="pushButton_4">
+          <property name="text">
+           <string>查询今日推荐</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="pushButton_5">
+          <property name="text">
+           <string>删除平台不推荐视频</string>
+          </property>
+         </widget>
+        </item>
+        <item>
          <spacer name="verticalSpacer">
           <property name="orientation">
            <enum>Qt::Vertical</enum>
@@ -337,13 +358,6 @@
             </property>
            </widget>
           </item>
-          <item>
-           <widget class="QPushButton" name="pushButton_3">
-            <property name="text">
-             <string>领取任务</string>
-            </property>
-           </widget>
-          </item>
          </layout>
         </item>
         <item>
@@ -380,24 +394,6 @@
            <widget class="QPushButton" name="pushButton_6">
             <property name="text">
              <string>停止</string>
-            </property>
-           </widget>
-          </item>
-         </layout>
-        </item>
-        <item>
-         <layout class="QHBoxLayout" name="horizontalLayout_4" stretch="1,1">
-          <item>
-           <widget class="QPushButton" name="pushButton_4">
-            <property name="text">
-             <string>查询今日推荐</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QPushButton" name="pushButton_5">
-            <property name="text">
-             <string>删除平台不推荐视频</string>
             </property>
            </widget>
           </item>
