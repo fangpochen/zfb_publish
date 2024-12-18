@@ -2,9 +2,11 @@ import ast
 import os.path
 import sys
 import time
+import warnings
 
+warnings.filterwarnings("ignore")
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QBrush, QColor
+from PyQt5.QtGui import QBrush, QColor, QPainter, QFont
 from PyQt5.QtWidgets import QMainWindow, QApplication, QTableWidgetItem, QCheckBox, QHBoxLayout, QWidget, QPushButton, \
     QFileDialog, QMessageBox
 from ui.ui import Ui_MainWindow
@@ -100,7 +102,7 @@ class Thread(QThread):
                                    not self.df.iloc[i]["is_main_account"], self.df.iloc[i]["mian_account_appid"])
         print(id_listm)
         delete_note(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], id_listm,
-                not self.df.iloc[i]["is_main_account"], self.df.iloc[i]["mian_account_appid"])
+                    not self.df.iloc[i]["is_main_account"], self.df.iloc[i]["mian_account_appid"])
         self.delete_note_signal.emit((i, len(id_listm)))
 
     def get_public_list(self, i):
@@ -199,6 +201,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.checkBox.stateChanged.connect(self.timer_login_start)
         if self.checkBox.isChecked():
             self.timer_login.start(300000)
+
+        self.tableWidget.paintEvent = self.paintEvent_tabel
+
+    def paintEvent_tabel(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self.tableWidget.viewport())
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setFont(QFont("Arial", 50))
+        painter.setPen(QColor(30, 31, 34,128))
+        text = "仅供学习使用"
+        text_rect = painter.fontMetrics().boundingRect(text)
+        x = (self.tableWidget.viewport().width() - text_rect.width()) / 2
+        y = (self.tableWidget.viewport().height() - text_rect.height()) / 2
+        painter.drawText(x, y + text_rect.height(), text)
+        painter.end()
 
     def all_check(self, status):
         try:
@@ -472,10 +489,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             return
 
         video_count = self.get_video_count(folder_path)
+        button = self.sender()
         if video_count > 0:
-            button = self.sender()
             button.setStyleSheet("""
-            background-color:rgb(78, 208, 94)""")
+            background-color:rgb(90, 212, 105)""")
+        else:
+            button.setStyleSheet("""
+            background-color: rgb(227, 61, 48)""")
+        self.tableWidget.setItem(data[1], 11, QTableWidgetItem(str(folder_path)))
         print(video_count)
         try:
             self.df.at[data[1], "folder_path"] = folder_path
@@ -483,7 +504,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             appid = self.df.iloc[data[1]]["appid"]
             df = self.df[self.df["appid"] == appid]
             update_existing_fields(df)
-            self.init_ui()
             self.update_video_count(data[1], video_count)
         except Exception as e:
             print(e)
@@ -519,6 +539,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def update_video_count(self, row, count):
         try:
+
             self.tableWidget.setItem(row, 9, QTableWidgetItem(str(count)))
         except Exception as e:
             print(e)
