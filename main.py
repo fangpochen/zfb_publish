@@ -3,6 +3,8 @@ import os.path
 import sys
 import time
 import warnings
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 warnings.filterwarnings("ignore")
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -35,40 +37,101 @@ class Thread(QThread):
 
     def __init__(self):
         super().__init__()
+        self._stop_event = threading.Event()
+        self.thread_pool = ThreadPoolExecutor(max_workers=self.max_workers)
+        self.active_tasks = []
+        self.task_lock = threading.Lock()
 
     def run(self):
         self.running = True
-        for i in range(self.df.shape[0]):
-            if not self.get_running():
-                break
-            try:
-                if self.model == 0:
-                    self.collecting_tasks(i)
+        self._stop_event.clear()
+        
+        try:
+            for i in range(self.df.shape[0]):
+                if self._stop_event.is_set():
+                    logger.info("检测到停止信号，正在终止任务...")
+                    break
+                
+                try:
+                    if self.model == 0:
+                        self._run_task(self.collecting_tasks, i)
+                    elif self.model == 1:
+                        self._wait_for_timing()
+                        if not self._stop_event.is_set():
+                            self._run_task(self.upload_publish_video, i)
+                    elif self.model == 2:
+                        self._run_task(self.get_public_list, i)
+                    elif self.model == 3:
+                        self._run_task(self.delete_note, i)
+                    elif self.model == 4:
+                        self._run_task(self.get_lifeOptionList, i)
+                except Exception as e:
+                    logger.error(f"任务执行错误: {str(e)}")
+                    self.error_signal.emit(i)
+                    
+        finally:
+            self._cleanup()
+            self.finish_signal.emit(None)
+            self.running = False
 
-                elif self.model == 1:
-                    while True:
-                        if self.timing is not None:
-                            time_data = self.timing.split(":")
-                            current_time = datetime.now().strftime('%H:%M:%S').split(":")
-                            if int(time_data[0]) == int(current_time[0]) and int(time_data[1]) == int(
-                                    current_time[1]) and int(
-                                time_data[2]) == int(current_time[2]):
-                                break
-                            time.sleep(1)
-                        else:
-                            break
-                    self.upload_publish_video(i)
-                elif self.model == 2:
-                    self.get_public_list(i)
-                elif self.model == 3:
-                    self.delete_note(i)
-                elif self.model == 4:
-                    self.get_lifeOptionList(i)
-            except Exception as e:
-                self.error_signal.emit(i)
+    def _run_task(self, task_func, *args):
+        """安全地运行任务并跟踪它"""
+        if self._stop_event.is_set():
+            return
+            
+        future = self.thread_pool.submit(task_func, *args)
+        with self.task_lock:
+            self.active_tasks.append(future)
+            
+        try:
+            future.result()  # 等待任务完成
+        except Exception as e:
+            logger.error(f"任务执行失败: {str(e)}")
+        finally:
+            with self.task_lock:
+                if future in self.active_tasks:
+                    self.active_tasks.remove(future)
 
-        self.finish_signal.emit(None)
+    def _wait_for_timing(self):
+        """等待定时任务的辅助方法"""
+        if self.timing is not None:
+            while not self._stop_event.is_set():
+                time_data = self.timing.split(":")
+                current_time = datetime.now().strftime('%H:%M:%S').split(":")
+                if (int(time_data[0]) == int(current_time[0]) and 
+                    int(time_data[1]) == int(current_time[1]) and 
+                    int(time_data[2]) == int(current_time[2])):
+                    break
+                time.sleep(1)
+
+    def _cleanup(self):
+        """清理所有正在运行的任务"""
+        logger.info("开始清理任务...")
+        
+        # 关闭线程池
+        self.thread_pool.shutdown(wait=False)
+        
+        # 取消所有正在运行的任务
+        with self.task_lock:
+            for future in self.active_tasks:
+                if not future.done():
+                    future.cancel()
+            self.active_tasks.clear()
+        
+        # 创建新的线程池
+        self.thread_pool = ThreadPoolExecutor(max_workers=self.max_workers)
+        logger.info("任务清理完成")
+
+    def stop(self):
+        """安全地停止所有任务"""
+        logger.info("正在停止所有任务...")
+        self._stop_event.set()
         self.running = False
+        self._cleanup()
+        logger.info("停止信号已发送")
+
+    def get_running(self):
+        return not self._stop_event.is_set()
 
     def get_lifeOptionList(self, i):
         """
@@ -82,13 +145,6 @@ class Thread(QThread):
         appid = self.df.iloc[i]["appid"]
         cookies = self.df.iloc[i]["cookies_dict"]
         get_lifeOptionList(cookies, appid)
-
-    def get_running(self):
-        return self.running
-
-    def stop(self):
-        self.running = False
-        logger.info("停止")
 
     def delete_note(self, i):
         """
@@ -244,8 +300,34 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             print(e)
 
     def thread_stop(self):
-        self.thread.stop()
-        self.update_button()
+        """处理停止按钮点击事件"""
+        try:
+            if self.thread.isRunning():
+                # 禁用停止按钮，防止重复点击
+                self.pushButton_6.setEnabled(False)
+                
+                # 显示停止中的提示
+                self.statusBar().showMessage("正在停止任务，请稍候...")
+                
+                # 停止线程
+                self.thread.stop()
+                
+                # 等待线程完全停止
+                if not self.thread.wait(5000):  # 等待最多5秒
+                    logger.warning("线程未能在预期时间内停止")
+                
+                # 更新界面状态
+                self.statusBar().showMessage("任务已停止", 3000)
+                self.update_button()
+                
+                # 刷新界面数据
+                self.init_ui()
+                
+                QMessageBox.information(self, "提示", "任务已停止")
+            
+        except Exception as e:
+            logger.error(f"停止任务时出错: {str(e)}")
+            QMessageBox.warning(self, "错误", f"停止任务失败: {str(e)}")
 
     def timer_login_start(self):
         try:

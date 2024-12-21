@@ -815,6 +815,7 @@ def upload_4m_video(mt, file_path):
 
         if file_size > max_size:
             return upload_large_video(mt, file_path, file_size)
+            
         # 打开文件
         with open(file_path, 'rb') as file:
             files = {
@@ -822,26 +823,38 @@ def upload_4m_video(mt, file_path):
             }
 
             headers = {
-                'Accept': '*/*',
-                'Accept-Language': 'zh-CN,zh;q=0.9',
-                'Origin': 'https://c.alipay.com',
-                'Referer': 'https://c.alipay.com/',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                'X-Mass-Appkey': 'apwallet',
-                'X-Mass-Biztype': 'content_lifetab',
-                'X-Mass-Cust-Conf': '{"extern":{"isWaterMark":true}}',
-                'X-Mass-Token': mt,
-                'Connection': 'keep-alive'
+            'Accept': '*/*',
+            'Accept-Language': 'zh-CN,zh;q=0.9',
+            'content-length':str(file_size),
+            'Origin': 'https://c.alipay.com',
+            'Referer': 'https://c.alipay.com/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            'X-Mass-Appkey': 'apwallet',
+            'X-Mass-Biztype': 'content_lifetab',
+            'X-Mass-Cust-Conf': '{"extern":{"isWaterMark":true}}',
+            'X-Mass-Token': mt,
+            'Connection': 'keep-alive'
+        }
+            params = {
+            'mt': mt,
+            'bz': 'content_lifetab',
+            'public': 'false',
             }
 
-            url = f'https://mass.alipay.com/file/auth/upload?mt={mt}&bz=content_lifetab&public=false'
-            response = requests.post(url, headers=headers, files=files)
-            logger.info(f'upload_4m_video response: {response.text}')  # 修改这行
-            file_id = json.loads(response.text).get('data').get('id')
+            # url = f'https://mass.alipay.com/file/auth/upload?mt={mt}&bz=content_lifetab&public=false'
+            response = requests.post('https://mass.alipay.com/file/auth/upload', params=params, headers=headers, files=files)
+            logger.info(f'upload_4m_video response: {response.text}')
+            logger.info(f'upload_4m_video response code: {response}')
+            file_id = json.loads(response.text).get('data', {}).get('id')
+            
+            if not file_id:
+                raise Exception("Failed to get file_id from response")
+                
             return file_id, file.name
+            
     except Exception as e:
-        logger.info(f"视频上传失败: {str(e)}")
-        return None
+        logger.info(f"视频上传失败 : {str(e)}")
+
 
 
 def upload_large_video(mt, file_path, file_size):
@@ -991,7 +1004,7 @@ def upload_pic(cookies, video_file_path):
 
 def get_video_url(file_id, mt, max_retries=60, retry_interval=5):
     """
-    获取视频URL,失败时在5分钟内每5秒重试一次
+    获取视频URL,失败时��5分钟内每5秒重试一次
 
     Args:
         file_id: 文件ID
@@ -1278,7 +1291,7 @@ def create_cover_from_video(video_path, output_path=None):
 
 
 def process_single_video(args):
-    cookies, file_path, mt, scheduleTime, title, appid, index, delete_original = args
+    cookies, file_path, scheduleTime, title, appid, index, delete_original = args
     video_name = os.path.basename(file_path)
     logger.info(f"开始处理视频: {video_name}")
 
@@ -1288,6 +1301,12 @@ def process_single_video(args):
     retries = 3
     for attempt in range(retries):
         try:
+            # 获取mt移到这里
+            logger.info(f"获取上传token - {video_name}")
+            mt = get_mt(cookies)
+            if not mt:
+                raise Exception("获取上传token失败")
+
             # 上传视频前先生成封面图
             logger.info(f"正在生成视频封面 - {video_name}")
             cover_path = create_cover_from_video(file_path)
@@ -1309,7 +1328,6 @@ def process_single_video(args):
                 extProperty = upload_pic(cookies, cover_path)
             except Exception as e:
                 logger.info(f"封面图上传失败 - {video_name}: {str(e)}")
-                # 如果封面上传失败，可以继续尝试使用默认封面
                 extProperty = upload_pic(cookies, "default_cover.jpg")
 
             appid = get_app_id(cookies)
@@ -1355,6 +1373,16 @@ def process_single_video(args):
 def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3, appid=None, index=None,
                          max_uploads=None, delete_original=True):
     cookies = get_sub_cookies(cookies, appid)
+    
+    # 添加视频文件列表定义
+    video_files = [os.path.join(dir_path, f) for f in os.listdir(dir_path) 
+                  if f.lower().endswith(('.mp4', '.mov', '.avi'))]
+    
+    if max_uploads:
+        video_files = video_files[:max_uploads]
+        
+    logger.info(f"找到{len(video_files)}个视频文件")
+
     """
     多线程处理视频上传
     :param cookies: cookies信息
@@ -1369,7 +1397,7 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
     """
     logger.info(f"""开始处理视频上传任务:
     - 目录: {dir_path}
-    - 定时发布: {scheduleTime or '立即发布'}
+    - 定时发布: {scheduleTime or '立��发布'}
     - 标题: {title}
     - 最大并发数: {max_workers}
     - 最大上传数: {max_uploads or '不限'}
@@ -1378,31 +1406,15 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
     - 删除原文件: {'是' if delete_original else '否'}
     """)
     try:
-        mt = get_mt(cookies)
-        logger.info("成功获取上传token")
-        video_files = []
+        # 删除这行，因为mt已经移到线程内部
+        # mt = get_mt(cookies)
+        
+        # ... (中间的代码保持不变)
 
-        # 收集所有视频文件路径
-        for root, _, files in os.walk(dir_path):
-            for file_name in files:
-                if file_name.endswith('.mp4'):
-                    full_path = os.path.join(root, file_name)
-                    video_files.append(full_path)
+        # 修改线程参数，移除mt
+        thread_args = [(cookies, file_path, scheduleTime, title, appid, index, delete_original) for file_path in video_files]
 
-        total_videos = len(video_files)
-        logger.info(f"找到 {total_videos} 个视频文件")
-
-        # 如果设置了上传数量限制，则只取指定数量的视频
-        if max_uploads is not None:
-            video_files = video_files[:max_uploads]
-            logger.info(f"根据限制，将处理 {len(video_files)} 个视频")
-
-        if not video_files:
-            logger.info("没有找到可处理的视频文件")
-            return
-
-        # 准备线程参数
-        thread_args = [(cookies, file_path, mt, scheduleTime, title, appid, index, delete_original) for file_path in video_files]
+        # ... (后面的代码保持不变)
 
         # 使用线程池执行上传任务
         logger.info(f"开始并发上传，并发数: {max_workers}")
