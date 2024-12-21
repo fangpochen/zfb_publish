@@ -8,12 +8,14 @@
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
+
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
         MainWindow.resize(1670, 1012)
         self.centralwidget = QtWidgets.QWidget(MainWindow)
-        self.centralwidget.setStyleSheet("QPushButton{height:41px;}QLineEdit{height:41px;}QComboBox{height:41px;}QLabel{font-size:11pt;}QRadioButton{font-size:11pt;}QDateTimeEdit{font-size:11pt;height:41px;}QTimeEdit{font-size:11pt;height:41px;}QCheckBox{font-size:11pt;height:41px;}")
+        self.centralwidget.setStyleSheet(
+            "QPushButton{height:41px;}QLineEdit{height:41px;}QComboBox{height:41px;}QLabel{font-size:11pt;}QRadioButton{font-size:11pt;}QDateTimeEdit{font-size:11pt;height:41px;}QTimeEdit{font-size:11pt;height:41px;}QCheckBox{font-size:11pt;height:41px;}")
         self.centralwidget.setObjectName("centralwidget")
         self.verticalLayout_4 = QtWidgets.QVBoxLayout(self.centralwidget)
         self.verticalLayout_4.setObjectName("verticalLayout_4")
@@ -85,7 +87,7 @@ class Ui_MainWindow(object):
         self.horizontalLayout_7.setObjectName("horizontalLayout_7")
         self.label_3 = QtWidgets.QLabel(self.centralwidget)
         self.label_3.setMinimumSize(QtCore.QSize(81, 0))
-        self.label_3.setAlignment(QtCore.Qt.AlignRight|QtCore.Qt.AlignTrailing|QtCore.Qt.AlignVCenter)
+        self.label_3.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignTrailing | QtCore.Qt.AlignVCenter)
         self.label_3.setObjectName("label_3")
         self.horizontalLayout_7.addWidget(self.label_3)
         self.lineEdit_2 = QtWidgets.QLineEdit(self.centralwidget)
@@ -215,7 +217,8 @@ class Ui_MainWindow(object):
 
     def retranslateUi(self, MainWindow):
         _translate = QtCore.QCoreApplication.translate
-        MainWindow.setWindowTitle(_translate("MainWindow", "视频批量上传"))
+        MainWindow.setWindowTitle(
+            _translate("MainWindow", "视频批量上传(本软件仅供本工作室使用，禁止外传 如若外传 追溯传播途径 IP永久封禁)"))
         item = self.tableWidget.horizontalHeaderItem(0)
         item.setText(_translate("MainWindow", "序号"))
         item = self.tableWidget.horizontalHeaderItem(1)
@@ -265,4 +268,3 @@ class Ui_MainWindow(object):
         self.lineEdit.setText(_translate("MainWindow", "3"))
         self.pushButton_2.setText(_translate("MainWindow", "开始上传"))
         self.pushButton_6.setText(_translate("MainWindow", "停止"))
-
