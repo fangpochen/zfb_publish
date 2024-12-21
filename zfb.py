@@ -107,24 +107,31 @@ def get_appid(cookies):
 def login():
     conn = sqlite3.connect('data.db')
     cursor = conn.cursor()
-    '''
-    return: 返回cookie和保持cookie所用的请求数据data
+    ''''
+    return :返回cookie和保持cookie所用的请求数据data
     '''
     co = ChromiumOptions().auto_port()
     co.set_argument('--window-size', '800,600')
     page = ChromiumPage(co)
     page.set.cookies.clear()
-    page.get('https://c.alipay.com/page/content-creation/publish/short-video?appId=2030095407214168')
-    page.wait.url_change('https://c.alipay.com/page/content-creation/publish/short-video?appId=2030086492507825',timeout=15)
+    page.get('https://c.alipay.com/page/portal/home')
+    # page.wait.load_start()
+    page.scroll.to_rightmost()
+    page.wait.url_change('https://c.alipay.com/page/life-account/index',timeout=90)
     page.listen.start('dwcookie?biztype=pcwallet')
     for i in range(3):
         try:
             page.ele('@@text()=内容发布', timeout=5).click()
+            # print('触发点击')
         except Exception as e:
+            # print(e)
             pass
 
     packets = page.listen.wait(5)
+    # logger.info(packets)
+    # print('packets:', packets)
     cookies_list = page.cookies()
+    # print('cookies_list', cookies_list)
     cookies_dict = {cookie['name']: cookie['value'] for cookie in cookies_list}
     appid, user_name, account_name = get_appid(cookies_dict)
     all_request = []
@@ -132,6 +139,7 @@ def login():
         request_data = dict()
         request_data['url'] = packet.url
         request_data['data'] = packet.request.postData
+        # print(packet.request.postData)
         all_request.append(request_data)
     page.quit()
     
@@ -357,12 +365,6 @@ def keep_cookies(request_all):
     '''
       :param 账号的request_all,类型为列表
       '''
-    request_data = random.choice(request_all)
-    url = request_data.get('url')
-    data = request_data.get('data')
-    '''
-       :param request_all: 传入数据库用户数据的request_all字段，类型为列表
-       '''
     headers = {
         'accept': '*/*',
         'accept-language': 'zh-CN,zh;q=0.9,en-GB;q=0.8,en;q=0.7,en-US;q=0.6',
@@ -380,15 +382,20 @@ def keep_cookies(request_all):
         'sec-fetch-site': 'same-site',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
     }
-    data = f'{data}'
-    response = requests.post(url, headers=headers, data=data)
-    jsondata = response.json()
-    code = jsondata['code']
-    code_v2 = jsondata['code_v2']
-    if code == 200 and code_v2 == 200:
-        return True
-    else:
-        return False
+    for request_param in request_all:
+        url = request_param.get('url')
+        data = request_param.get('data')
+        datas = f'{data}'
+        response = requests.post(url, headers=headers, data=datas)
+        jsondata = response.json()
+        code = jsondata['code']
+        code_v2 = jsondata['code_v2']
+        if code == 200 and code_v2 == 200:
+            # print('触发点击事件1:',code,code_v2)
+            return True
+        else:
+            # print('触发点击事件2:', code, code_v2)
+            return False
 
 
 # 获取appid
