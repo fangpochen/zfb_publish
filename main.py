@@ -8,13 +8,13 @@ warnings.filterwarnings("ignore")
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QBrush, QColor, QPainter, QFont, QIcon
 from PyQt5.QtWidgets import QMainWindow, QApplication, QTableWidgetItem, QCheckBox, QHBoxLayout, QWidget, QPushButton, \
-    QFileDialog, QMessageBox
+    QFileDialog, QMessageBox, QAbstractItemView
 from ui.ui import Ui_MainWindow
 from zfb import *
 import pandas as pd
 from db import update_existing_fields, delete_records_by_appids
 from datetime import datetime
-from key_validator import check_saved_key, verify_key
+from key_validator import check_saved_key, verify_key 
 
 conn = sqlite3.connect('data.db')
 
@@ -31,6 +31,10 @@ class Thread(QThread):
     running = False
     timing = None
     web_timing = None
+    delete_original = True  # 默认为True
+
+    def __init__(self):
+        super().__init__()
 
     def run(self):
         self.running = True
@@ -46,7 +50,6 @@ class Thread(QThread):
                         if self.timing is not None:
                             time_data = self.timing.split(":")
                             current_time = datetime.now().strftime('%H:%M:%S').split(":")
-                            print(time_data, current_time)
                             if int(time_data[0]) == int(current_time[0]) and int(time_data[1]) == int(
                                     current_time[1]) and int(
                                 time_data[2]) == int(current_time[2]):
@@ -56,7 +59,6 @@ class Thread(QThread):
                             break
                     self.upload_publish_video(i)
                 elif self.model == 2:
-                    print(f"开始查询今日推荐{i}")
                     self.get_public_list(i)
                 elif self.model == 3:
                     self.delete_note(i)
@@ -101,7 +103,6 @@ class Thread(QThread):
         logger.info(str(self.df.iloc[i]["appid"]))
         id_listm = get_public_list(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], "delete",
                                    not self.df.iloc[i]["is_main_account"], self.df.iloc[i]["mian_account_appid"])
-        print(id_listm)
         delete_note(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], id_listm,
                     not self.df.iloc[i]["is_main_account"], self.df.iloc[i]["mian_account_appid"])
         self.delete_note_signal.emit((i, len(id_listm)))
@@ -115,13 +116,11 @@ class Thread(QThread):
         Returns:
 
         """
-        print(f"获取第{i}个账号推荐")
         try:
             get_public_list(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["appid"], "recommend",
                             not self.df.iloc[i]["is_main_account"], self.df.iloc[i]["mian_account_appid"])
         except Exception as e:
             print("账号推荐异常:", e)
-        print(f"获取第{i}个账号推荐完成")
 
     def collecting_tasks(self, i):
         """
@@ -144,7 +143,6 @@ class Thread(QThread):
         Returns:
 
         """
-
         scheduleTime = self.web_timing
         logger.info(f"文件夹路径:{self.df.iloc[i]['folder_path']}")
         logger.info(f'话题:{self.df.iloc[i]["topic_settings"]}')
@@ -152,11 +150,10 @@ class Thread(QThread):
         logger.info("cookies:" + str(self.df.iloc[i]["cookies_dict"]))
         logger.info("appid:" + str(self.df.iloc[i]["appid"]))
         try:
-            pass
             upload_publish_video(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["folder_path"],
                                  self.df.iloc[i]["topic_settings"],
                                  scheduleTime, max_workers=self.max_workers, appid=self.df.iloc[i]["appid"], index=i,
-                                 max_uploads=self.df.iloc[i]["total_uploads"])
+                                 max_uploads=self.df.iloc[i]["total_uploads"], delete_original=self.delete_original)
 
         except Exception as e:
             logger.info(f"upload_publish_video报错:{e}")
@@ -210,6 +207,18 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
+        # 添加删除原视频的复选框
+        self.delete_video_checkbox = QCheckBox("上传后删除原视频")
+        self.delete_video_checkbox.setChecked(True)  # 默认勾选
+        
+        # 将复选框添加到现有布局中
+        # 假设我们要添加到 horizontalLayout_2 中
+        self.horizontalLayout_2.addWidget(self.delete_video_checkbox)
+
+        # 添加这些设置来启用行选择
+        self.tableWidget.setSelectionBehavior(QAbstractItemView.SelectRows)  # 设置选择行为为选择整行
+        self.tableWidget.setSelectionMode(QAbstractItemView.SingleSelection)  # 设置选择模式为单行选择
+
     def paintEvent_tabel(self, event):
         super().paintEvent(event)
         painter = QPainter(self.tableWidget.viewport())
@@ -252,7 +261,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             df = self.get_df()
             df = df[df["is_main_account"] == 1]
             for i in range(df.shape[0]):
-                print(df.loc[i])
                 request_all = ast.literal_eval(df.loc[i, "request_all"])
                 keep_cookies(request_all)
         except Exception as e:
@@ -264,17 +272,32 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         Returns:
         """
         try:
-            self.thread.model = 4
+            # 获取当前选中的行索引
+            current_row = self.tableWidget.currentRow()
+            if current_row == -1:
+                QMessageBox.warning(self, "提示", "请先选择一个账号")
+                return
+            
             df = self.get_df()
-            df = df.loc[df["is_main_account"] == 1]
-            data = self.get_check_row()
-            df = df.loc[data]
-            update_existing_fields(df)
-            self.thread.df = df
+            
+            # 检查是否是主账号
+            if not df.iloc[current_row]["is_main_account"]:
+                QMessageBox.warning(self, "提示", "请选择主账号")
+                return
+            
+            # 获取选中行的cookies和appid
+            cookies = df.iloc[current_row]["cookies_dict"]
+            appid = df.iloc[current_row]["appid"]
+            
+            # 调用获取子账号的函数
+            self.thread.model = 4
+            self.thread.df = pd.DataFrame([df.iloc[current_row]])
             self.thread.start()
             self.update_button()
+            
         except Exception as e:
-            print("get_lifeOptionList:", e)
+            logger.error(f"get_lifeOptionList error: {str(e)}")
+            QMessageBox.warning(self, "错误", f"获取子账号失败: {str(e)}")
 
     def clear_account(self):
         data = self.get_check_row()
@@ -506,7 +529,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             button.setStyleSheet("""
             background-color: rgb(227, 61, 48)""")
         self.tableWidget.setItem(data[1], 11, QTableWidgetItem(str(folder_path)))
-        print(video_count)
         try:
             self.df.at[data[1], "folder_path"] = folder_path
             self.df.at[data[1], "total_files"] = video_count
@@ -527,7 +549,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         data = []
         for i in range(row):
             cell_widget = self.tableWidget.cellWidget(i, 0)
-            print(type(cell_widget))
             if isinstance(cell_widget, QCheckBox):
                 data.append(cell_widget.isChecked())
         self.df["check_"] = data
@@ -594,6 +615,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         else:
             self.thread.web_timing = None
             self.thread.timing = None
+            
+        # 传递删除视频的配置
+        self.thread.delete_original = self.delete_video_checkbox.isChecked()
+        
         df = self.get_df()
         data = self.get_check_row()
         df = df.loc[data]
@@ -670,9 +695,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
 if __name__ == '__main__':
     # 验证秘钥
-    if not check_saved_key():
-        if not verify_key():
-            sys.exit(1)
+    # if not check_saved_key():
+    #     if not verify_key():
+    #         sys.exit(1)
     
     current_date = datetime.now().strftime('%Y-%m-%d')
     expiry_date = '2025-01-01'  # 设置到2025年1月1日

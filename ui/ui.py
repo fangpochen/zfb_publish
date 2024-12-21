@@ -141,6 +141,7 @@ class Ui_MainWindow(object):
         self.horizontalLayout_6.addWidget(self.radioButton_2)
         self.dateTimeEdit = QtWidgets.QDateTimeEdit(self.frame)
         self.dateTimeEdit.setObjectName("dateTimeEdit")
+        self.dateTimeEdit.setDateTime(QtCore.QDateTime.currentDateTime())
         self.horizontalLayout_6.addWidget(self.dateTimeEdit)
         self.verticalLayout.addLayout(self.horizontalLayout_6)
         self.radioButton_3 = QtWidgets.QRadioButton(self.frame)

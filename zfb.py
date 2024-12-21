@@ -26,6 +26,8 @@ MAX_REQUESTS_PER_MINUTE = 2
 def create_table():
     conn = sqlite3.connect('data.db')
     cursor = conn.cursor()
+    
+    # 创建表格(如果不存在)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS user_data (
             appid CHAR(64) PRIMARY KEY,          
@@ -36,7 +38,7 @@ def create_table():
             daily_recommendations INTEGER DEFAULT 0, 
             total_uploads INTEGER DEFAULT 50,     
             current_uploads INTEGER DEFAULT 0,   
-            topic_settings TEXT DEFAULT '默认话题', 
+            topic_settings TEXT DEFAULT '', 
             delete_unrecommended INTEGER DEFAULT 0, 
             total_files INTEGER DEFAULT 0,       
             folder_path TEXT DEFAULT NULL,       
@@ -46,7 +48,17 @@ def create_table():
             mian_account_appid CHAR(64)                 
         )
     ''')
+    
+    # 重置每日计数器
+    cursor.execute('''
+        UPDATE user_data 
+        SET daily_recommendations = 0,
+            current_uploads = 0,
+            delete_unrecommended = 0
+    ''')
+    
     logger.info("表格检查完成（已存在或成功创建）")
+    logger.info("已重置每日计数器")
     conn.commit()
     conn.close()
 
@@ -95,8 +107,8 @@ def get_appid(cookies):
 def login():
     conn = sqlite3.connect('data.db')
     cursor = conn.cursor()
-    ''''
-    return :返回cookie和保持cookie所用的请求数据data
+    '''
+    return: 返回cookie和保持cookie所用的请求数据data
     '''
     co = ChromiumOptions().auto_port()
     co.set_argument('--window-size', '800,600')
@@ -112,7 +124,6 @@ def login():
             pass
 
     packets = page.listen.wait(5)
-    # logger.info(packets)
     cookies_list = page.cookies()
     cookies_dict = {cookie['name']: cookie['value'] for cookie in cookies_list}
     appid, user_name, account_name = get_appid(cookies_dict)
@@ -123,15 +134,42 @@ def login():
         request_data['data'] = packet.request.postData
         all_request.append(request_data)
     page.quit()
-    cursor.execute('''
-        INSERT INTO user_data (appid, cookies, user_name, account_name, request_all, is_main_account)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(appid) DO UPDATE SET
-            cookies = excluded.cookies,
-            request_all = excluded.request_all
-        ''', (appid, json.dumps(cookies_dict), user_name, account_name, str(all_request), 1))
+    
+    # 检查是否存在相同的appid
+    cursor.execute('SELECT COUNT(*) FROM user_data WHERE appid = ?', (appid,))
+    exists = cursor.fetchone()[0] > 0
+    
+    if exists:
+        # 如果存在相同appid，更新所有账号的cookies
+        logger.info(f"检测到已存在appid: {appid}, 更新所有账号cookies")
+        cursor.execute('''
+            UPDATE user_data 
+            SET cookies = ?
+        ''', (json.dumps(cookies_dict),))
+        
+        # 更新当前登录账号的其他信息
+        cursor.execute('''
+            UPDATE user_data 
+            SET user_name = ?,
+                account_name = ?,
+                request_all = ?
+            WHERE appid = ?
+        ''', (user_name, account_name, str(all_request), appid))
+    else:
+        # 如果是新账号，则插入新记录
+        logger.info(f"检测到新appid: {appid}, 创建新账号记录")
+        cursor.execute('''
+            INSERT INTO user_data (
+                appid, cookies, user_name, account_name, 
+                request_all, is_main_account
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (appid, json.dumps(cookies_dict), user_name, 
+              account_name, str(all_request), 1))
+    
     conn.commit()
     conn.close()
+    logger.info(f"账号信息更新完成")
     return cookies_dict, appid, user_name, all_request
 def get_sub_cookies(cookies, appid):
     '''
@@ -992,6 +1030,7 @@ def get_video_url(file_id, mt, max_retries=60, retry_interval=5):
             time.sleep(retry_interval)
 
         except Exception as e:
+            logger.info('get_video_url{}',json.loads(response.text))
             logger.info(f"Attempt {attempt + 1} failed: {str(e)}")
             if attempt < max_retries - 1:
                 time.sleep(retry_interval)
@@ -1179,9 +1218,36 @@ def create_cover_from_video(video_path, output_path=None):
             from PIL import Image
             img = Image.fromarray(frame_rgb)
             
-            # 直接保存原始分辨率,不做尺寸调整
+            # 调整图片尺寸为2030x2700，保持宽高比
+            target_width = 2030
+            target_height = 2700
+            
+            # 计算原始宽高比
+            original_ratio = img.width / img.height
+            target_ratio = target_width / target_height
+            
+            if original_ratio > target_ratio:
+                # 原图较宽，以高度为基准进行缩放
+                new_height = target_height
+                new_width = int(target_height * original_ratio)
+                resize_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                # 从中心裁剪
+                left = (new_width - target_width) // 2
+                right = left + target_width
+                crop_img = resize_img.crop((left, 0, right, target_height))
+            else:
+                # 原图较高，以宽度为基准进行缩放
+                new_width = target_width
+                new_height = int(target_width / original_ratio)
+                resize_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                # 从中心裁剪
+                top = (new_height - target_height) // 2
+                bottom = top + target_height
+                crop_img = resize_img.crop((0, top, target_width, bottom))
+            
+            # 保存调整后的图片
             try:
-                img.save(output_path, "JPEG", quality=95)
+                crop_img.save(output_path, "JPEG", quality=95)
                 logger.info(f"使用PIL保存图片成功: {output_path}")
 
                 if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
@@ -1205,7 +1271,7 @@ def create_cover_from_video(video_path, output_path=None):
 
 
 def process_single_video(args):
-    cookies, file_path, mt, scheduleTime, title, appid, index = args
+    cookies, file_path, mt, scheduleTime, title, appid, index, delete_original = args
     video_name = os.path.basename(file_path)
     logger.info(f"开始处理视频: {video_name}")
 
@@ -1246,12 +1312,16 @@ def process_single_video(args):
             logger.info(f"发布视频内容 - {video_name}")
             publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies)
 
-            # 清理文件
-            os.remove(file_path)
-            cover_path = os.path.splitext(file_path)[0] + '.jpg'
-            if os.path.exists(cover_path):
-                os.remove(cover_path)
-                logger.info(f"清理临时文件完成 - {video_name}")
+            # 根据配置决定是否删除原文件
+            if delete_original:
+                # 清理文件
+                os.remove(file_path)
+                cover_path = os.path.splitext(file_path)[0] + '.jpg'
+                if os.path.exists(cover_path):
+                    os.remove(cover_path)
+                    logger.info(f"清理临时文件完成 - {video_name}")
+            else:
+                logger.info(f"保留原始视频文件 - {video_name}")
 
             if appid:
                 update_uploads_and_files(appid)
@@ -1276,7 +1346,7 @@ def process_single_video(args):
 
 
 def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3, appid=None, index=None,
-                         max_uploads=None):
+                         max_uploads=None, delete_original=True):
     cookies = get_sub_cookies(cookies, appid)
     """
     多线程处理视频上传
@@ -1288,10 +1358,18 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
     :param appid: appid
     :param index: 序号
     :param max_uploads: 最大上传数量限制（可选）
+    :param delete_original: 是否删除原始视频文件
     """
-    logger.info(f"开始处理视频上传任务 - 目录: {dir_path}")
-    logger.info(f"scheduleTime: {scheduleTime}")
-    logger.info(f"上传参数 - 最大并发数: {max_workers}, 最大上传数: {max_uploads or '不限'}")
+    logger.info(f"""开始处理视频上传任务:
+    - 目录: {dir_path}
+    - 定时发布: {scheduleTime or '立即发布'}
+    - 标题: {title}
+    - 最大并发数: {max_workers}
+    - 最大上传数: {max_uploads or '不限'}
+    - AppID: {appid or '未指定'}
+    - 序号: {index or '未指定'}
+    - 删除原文件: {'是' if delete_original else '否'}
+    """)
     try:
         mt = get_mt(cookies)
         logger.info("成功获取上传token")
@@ -1317,7 +1395,7 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
             return
 
         # 准备线程参数
-        thread_args = [(cookies, file_path, mt, scheduleTime, title, appid, index) for file_path in video_files]
+        thread_args = [(cookies, file_path, mt, scheduleTime, title, appid, index, delete_original) for file_path in video_files]
 
         # 使用线程池执行上传任务
         logger.info(f"开始并发上传，并发数: {max_workers}")
