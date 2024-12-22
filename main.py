@@ -5,6 +5,8 @@ import time
 import warnings
 import threading
 from concurrent.futures import ThreadPoolExecutor
+import zipfile
+from datetime import datetime
 
 warnings.filterwarnings("ignore")
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -15,7 +17,6 @@ from ui.ui import Ui_MainWindow
 from zfb import *
 import pandas as pd
 from db import update_existing_fields, delete_records_by_appids
-from datetime import datetime
 from key_validator import check_saved_key, verify_key 
 
 conn = sqlite3.connect('data.db')
@@ -222,64 +223,166 @@ class Thread(QThread):
 
 class MainWindow(QMainWindow, Ui_MainWindow):
     def __init__(self):
-        super().__init__()
-        self.log_file_path = "log.log"
-        self.current_offset = 0
-        if os.path.exists(self.log_file_path):
-            self.current_offset = len(open(self.log_file_path, "r", encoding="utf-8").readlines())
+        try:
+            logger.info("开始初始化主窗口...")
+            super().__init__()
+            
+            # 日志管理初始化
+            self.log_file_path = "log.log"
+            self.log_max_size = 5 * 1024 * 1024  # 5MB
+            self.check_and_rotate_log()
+            
+            self.current_offset = 0
+            if os.path.exists(self.log_file_path):
+                self.current_offset = len(open(self.log_file_path, "r", encoding="utf-8").readlines())
 
-        self.setupUi(self)
-        self.lineEdit.setText("50")
-        self.thread = Thread()
-        self.thread.error_signal.connect(self.update_table_cookie)
-        self.thread.finish_signal.connect(self.finish)
-        self.thread.upload_signal.connect(self.update_table_upload)
-        self.thread.recommend_signal.connect(self.update_table_recommend)
-        self.thread.delete_note_signal.connect(self.update_table_delete_note)
-        self.pushButton_7.clicked.connect(self.set_tags)  # 绑定设置话题
-        self.pushButton_9.clicked.connect(self.set_upload_counts)  # 绑定设置上传数量
-        self.pushButton_6.clicked.connect(self.stop_tasks)
-        self.pushButton_6.setEnabled(False)  # 初始状态禁用停止按钮
-        self.pushButton_8.clicked.connect(self.clear_account)
-        self.pushButton_10.clicked.connect(self.get_lifeOptionList)
-        self.pushButton_11.clicked.connect(lambda: self.all_check(True))
-        self.pushButton_12.clicked.connect(lambda: self.all_check(False))
+            self.setupUi(self)
+            self.lineEdit.setText("50")
+            self.thread = Thread()
+            self.thread.error_signal.connect(self.update_table_cookie)
+            self.thread.finish_signal.connect(self.finish)
+            self.thread.upload_signal.connect(self.update_table_upload)
+            self.thread.recommend_signal.connect(self.update_table_recommend)
+            self.thread.delete_note_signal.connect(self.update_table_delete_note)
+            self.pushButton_7.clicked.connect(self.set_tags)  # 绑定设置话题
+            self.pushButton_9.clicked.connect(self.set_upload_counts)  # 绑定设置上传数量
+            self.pushButton_6.clicked.connect(self.stop_tasks)
+            self.pushButton_6.setEnabled(False)  # 初始状态禁用停止按钮
+            self.pushButton_8.clicked.connect(self.clear_account)
+            self.pushButton_10.clicked.connect(self.get_lifeOptionList)
+            self.pushButton_11.clicked.connect(lambda: self.all_check(True))
+            self.pushButton_12.clicked.connect(lambda: self.all_check(False))
 
-        # 设置定时器
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_log)
-        self.timer.start(1000)  # 每隔 1 秒检查日志文件
+            # 设置定时器
+            self.timer = QTimer(self)
+            self.timer.timeout.connect(self.update_log)
+            self.timer.start(1000)  # 每隔 1 秒检查日志文件
 
-        self.timer_db = QTimer(self)
-        self.timer_db.timeout.connect(self.init_ui)
+            self.timer_db = QTimer(self)
+            self.timer_db.timeout.connect(self.init_ui)
 
-        self.df = pd.DataFrame()
-        self.init_ui()
+            self.df = pd.DataFrame()
+            self.init_ui()
 
-        self.timer_login = QTimer(self)
-        self.timer_login.timeout.connect(self.request_all)
-        self.checkBox.stateChanged.connect(self.timer_login_start)
-        if self.checkBox.isChecked():
-            self.timer_login.start(300000)
+            self.timer_login = QTimer(self)
+            self.timer_login.timeout.connect(self.request_all)
+            self.checkBox.stateChanged.connect(self.timer_login_start)
+            if self.checkBox.isChecked():
+                self.timer_login.start(300000)
 
-        # self.tableWidget.paintEvent = self.paintEvent_tabel
+            # self.tableWidget.paintEvent = self.paintEvent_tabel
 
-        # 设置窗口图标
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.ico")
-        if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
+            # 设置窗口图标
+            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.ico")
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
 
-        # 添加删除原视频的复选框
-        self.delete_video_checkbox = QCheckBox("上传后删除原视频")
-        self.delete_video_checkbox.setChecked(True)  # 默认勾选
-        
-        # 将复选框添加到现有布局中
-        # 假设我们要添加到 horizontalLayout_2 中
-        self.horizontalLayout_2.addWidget(self.delete_video_checkbox)
+            # 添加删除原视频的复选框
+            self.delete_video_checkbox = QCheckBox("上传后删除原视频")
+            self.delete_video_checkbox.setChecked(True)  # 默认勾选
+            
+            # 将复选框添加到现有布局中
+            # 假设我们要添加到 horizontalLayout_2 中
+            self.horizontalLayout_2.addWidget(self.delete_video_checkbox)
 
-        # 添加这些设置来启用行选择
-        self.tableWidget.setSelectionBehavior(QAbstractItemView.SelectRows)  # 设置选择行为为选择整行
-        self.tableWidget.setSelectionMode(QAbstractItemView.SingleSelection)  # 设置选择模式为单行选择
+            # 添加这些设置来启用行选择
+            self.tableWidget.setSelectionBehavior(QAbstractItemView.SelectRows)  # 设置选择行为为选择整行
+            self.tableWidget.setSelectionMode(QAbstractItemView.SingleSelection)  # 设置选择模式为单行选择
+
+            # 添加日志检查定时器
+            self.log_check_timer = QTimer(self)
+            self.log_check_timer.timeout.connect(self.check_and_rotate_log)
+            self.log_check_timer.start(300000)  # 每5分钟检查一次
+            
+        except Exception as e:
+            logger.error(f"主窗口初始化失败: {str(e)}")
+            print(f"初始化失败: {str(e)}")
+
+    def check_and_rotate_log(self):
+        """检查并轮换日志文件"""
+        try:
+            if not os.path.exists(self.log_file_path):
+                return
+                
+            # 检查日志文件大小
+            log_size = os.path.getsize(self.log_file_path)
+            
+            if log_size >= self.log_max_size:
+                logger.info("日志文件超过5MB，开始轮换...")
+                
+                # 创建logs目录（如果不存在）
+                logs_dir = "logs"
+                if not os.path.exists(logs_dir):
+                    os.makedirs(logs_dir)
+                
+                # 生成新的日志文件名（使用时间戳）
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                archive_name = os.path.join(logs_dir, f"log_{timestamp}.zip")
+                
+                # 创建ZIP文件
+                with zipfile.ZipFile(archive_name, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    zipf.write(self.log_file_path, os.path.basename(self.log_file_path))
+                
+                # 清空当前日志文件
+                open(self.log_file_path, 'w', encoding='utf-8').close()
+                
+                # 更新offset
+                self.current_offset = 0
+                
+                # 清理旧的日志文件（保留最近10个）
+                self.cleanup_old_logs()
+                
+                logger.info(f"日志已轮换，归档为: {archive_name}")
+                
+        except Exception as e:
+            print(f"日志轮换失败: {str(e)}")
+            logger.error(f"日志轮换失败: {str(e)}")
+
+    def cleanup_old_logs(self):
+        """清理旧的日志文件，只保留最近10个"""
+        try:
+            logs_dir = "logs"
+            if not os.path.exists(logs_dir):
+                return
+                
+            # 获取所有日志文件
+            log_files = [f for f in os.listdir(logs_dir) if f.startswith("log_") and f.endswith(".zip")]
+            
+            # 按时间排序
+            log_files.sort(reverse=True)
+            
+            # 删除多余的日志文件
+            for old_log in log_files[10:]:
+                try:
+                    os.remove(os.path.join(logs_dir, old_log))
+                    logger.info(f"删除旧日志: {old_log}")
+                except Exception as e:
+                    logger.error(f"删除旧日志失败 {old_log}: {str(e)}")
+                    
+        except Exception as e:
+            logger.error(f"清理旧日志失败: {str(e)}")
+
+    def update_log(self):
+        """更新日志内容到 QTextBrowser"""
+        try:
+            if not os.path.exists(self.log_file_path):
+                return
+
+            with open(self.log_file_path, "r", encoding="utf-8") as log_file:
+                log_file.seek(self.current_offset)
+                new_lines = log_file.readlines()
+                self.current_offset = log_file.tell()
+
+                # 将新内容追加到文本浏览器
+                for line in new_lines:
+                    self.textBrowser.append(line.strip())
+                    
+                # 保持滚动到底部
+                scrollbar = self.textBrowser.verticalScrollBar()
+                scrollbar.setValue(scrollbar.maximum())
+                
+        except Exception as e:
+            print(f"更新日志失败: {str(e)}")
 
     def paintEvent_tabel(self, event):
         super().paintEvent(event)
