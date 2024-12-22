@@ -127,6 +127,11 @@ class Thread(QThread):
         logger.info("正在停止所有任务...")
         self._stop_event.set()
         self.running = False
+        
+        # 停止 zfb 中的任务
+        from zfb import thread_control
+        thread_control.stop()  # 使用 thread_control 实例来停止任务
+        
         self._cleanup()
         logger.info("停止信号已发送")
 
@@ -217,7 +222,7 @@ class Thread(QThread):
 
 class MainWindow(QMainWindow, Ui_MainWindow):
     def __init__(self):
-        super(MainWindow, self).__init__()
+        super().__init__()
         self.log_file_path = "log.log"
         self.current_offset = 0
         if os.path.exists(self.log_file_path):
@@ -233,7 +238,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.thread.delete_note_signal.connect(self.update_table_delete_note)
         self.pushButton_7.clicked.connect(self.set_tags)  # 绑定设置话题
         self.pushButton_9.clicked.connect(self.set_upload_counts)  # 绑定设置上传数量
-        self.pushButton_6.clicked.connect(self.thread_stop)
+        self.pushButton_6.clicked.connect(self.stop_tasks)
+        self.pushButton_6.setEnabled(False)  # 初始状态禁用停止按钮
         self.pushButton_8.clicked.connect(self.clear_account)
         self.pushButton_10.clicked.connect(self.get_lifeOptionList)
         self.pushButton_11.clicked.connect(lambda: self.all_check(True))
@@ -299,12 +305,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         except Exception as e:
             print(e)
 
-    def thread_stop(self):
+    def stop_tasks(self):
         """处理停止按钮点击事件"""
         try:
             if self.thread.isRunning():
                 # 禁用停止按钮，防止重复点击
                 self.pushButton_6.setEnabled(False)
+                self.pushButton_6.setText("正在停止...")
                 
                 # 显示停止中的提示
                 self.statusBar().showMessage("正在停止任务，请稍候...")
@@ -317,6 +324,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                     logger.warning("线程未能在预期时间内停止")
                 
                 # 更新界面状态
+                self.pushButton_6.setText("停止")
                 self.statusBar().showMessage("任务已停止", 3000)
                 self.update_button()
                 
@@ -545,7 +553,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             # 第三列：账号名称
             self.tableWidget.setItem(i, 2, QTableWidgetItem(df.iloc[i]["user_name"]))
 
-            # 第四列：推荐数
+            # 第四列：���荐数
             self.tableWidget.setItem(i, 3, QTableWidgetItem(str(self.df.iloc[i]["daily_recommendations"])))
             # 第四列：cookies状态
             self.tableWidget.setItem(i, 4, QTableWidgetItem(self.df.iloc[i]["cookies_status"]))
@@ -657,63 +665,85 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             print(e)
 
     def update_button(self):
+        """更新按钮状态"""
         try:
-            # 直接取反 `self.thread.isRunning()` 的值
-            enabled = not self.thread.isRunning()
-
-            # 使用循环来批量设置按钮状态
-            for button in [self.pushButton, self.pushButton_2, self.pushButton_3, self.pushButton_4, self.pushButton_5]:
-                button.setEnabled(enabled)
-            self.pushButton_6.setEnabled(self.thread.isRunning())
+            # 根据线程运行状态设置按钮启用/禁用
+            is_running = self.thread.isRunning()
+            
+            # 设置功能按钮状态
+            for button in [self.pushButton, self.pushButton_2, 
+                         self.pushButton_3, self.pushButton_4, 
+                         self.pushButton_5]:
+                button.setEnabled(not is_running)
+            
+            # 设置停止按钮状态
+            self.pushButton_6.setEnabled(is_running)
+            
         except Exception as e:
-            print(e)
+            logger.error(f"更新按钮状态失败: {str(e)}")
 
     def claim_task(self):
-        logger.info("领取任务")
-        self.thread.model = 0
-        df = self.get_df()
-        data = self.get_check_row()
-        df = df.loc[data]
-        update_existing_fields(df)
-        self.thread.df = df
-        self.thread.start()
-        self.timer_db.start(1000)
-        self.update_button()
+        """领取任务"""
+        try:
+            logger.info("领取任务")
+            self.thread.model = 0
+            
+            # 准备数据
+            df = self.get_df()
+            data = self.get_check_row()
+            df = df.loc[data]
+            update_existing_fields(df)
+            self.thread.df = df
+            
+            # 启动线程
+            self.thread.start()
+            self.timer_db.start(1000)
+            
+            # 更新按钮状态
+            self.update_button()
+            
+        except Exception as e:
+            logger.error(f"领取任务失败: {str(e)}")
+            QMessageBox.warning(self, "错误", f"领取任务失败: {str(e)}")
 
     def start_upload(self):
-        """
-        开始上传
-        Returns:
-
-        """
-        logger.info("开始上传")
-        self.thread.model = 1
-        if self.radioButton.isChecked():
-            self.thread.timing = self.timeEdit.text()
-            self.thread.web_timing = None
-        elif self.radioButton_2.isChecked():
-            self.thread.web_timing = self.dateTimeEdit.text()
-            self.thread.timing = None
-        else:
-            self.thread.web_timing = None
-            self.thread.timing = None
-            
-        # 传递删除视频的配置
-        self.thread.delete_original = self.delete_video_checkbox.isChecked()
-        
-        df = self.get_df()
-        data = self.get_check_row()
-        df = df.loc[data]
-        update_existing_fields(df)
-        self.thread.df = df
-        self.thread.max_workers = int(self.lineEdit.text())
-
-        self.thread.start()
-        self.timer_db.start(1000)
+        """开始上传任务"""
         try:
+            logger.info("开始上传")
+            self.thread.model = 1
+            
+            # 设置定时配置
+            if self.radioButton.isChecked():
+                self.thread.timing = self.timeEdit.text()
+                self.thread.web_timing = None
+            elif self.radioButton_2.isChecked():
+                self.thread.web_timing = self.dateTimeEdit.text()
+                self.thread.timing = None
+            else:
+                self.thread.web_timing = None
+                self.thread.timing = None
+            
+            # 设置删除视频配置
+            self.thread.delete_original = self.delete_video_checkbox.isChecked()
+            
+            # 准备数据
+            df = self.get_df()
+            data = self.get_check_row()
+            df = df.loc[data]
+            update_existing_fields(df)
+            self.thread.df = df
+            self.thread.max_workers = int(self.lineEdit.text())
+
+            # 启动线程
+            self.thread.start()
+            self.timer_db.start(1000)
+            
+            # 更新按钮状态
             self.update_button()
+            
         except Exception as e:
-            print(e)
+            logger.error(f"启动上传任务失败: {str(e)}")
+            QMessageBox.warning(self, "错误", f"启动任务失败: {str(e)}")
 
     def get_today_recommendations(self):
         """

@@ -15,13 +15,50 @@ from logger import logger
 import requests
 from ratelimit import limits, sleep_and_retry
 from DrissionPage import ChromiumPage, ChromiumOptions
+import threading
+import logging
+from concurrent.futures import ThreadPoolExecutor
 
 # 限制每分钟最多处理2个视频
 ONE_MINUTE = 60
 MAX_REQUESTS_PER_MINUTE = 2
 
+# 在文件开头添加线程控制类
+class ThreadControl:
+    def __init__(self):
+        self._stop_event = threading.Event()
+        self.active_futures = set()
+        self.lock = threading.Lock()
+        
+    def stop(self):
+        """设置停止标志并取消所有活动任务"""
+        self._stop_event.set()
+        with self.lock:
+            for future in self.active_futures:
+                if not future.done():
+                    future.cancel()
+            self.active_futures.clear()
+    
+    def clear(self):
+        """清除停止标志"""
+        self._stop_event.clear()
+        
+    def should_stop(self):
+        """检查是否应该停止"""
+        return self._stop_event.is_set()
+    
+    def add_future(self, future):
+        """添加future到活动任务集合"""
+        with self.lock:
+            self.active_futures.add(future)
+            
+    def remove_future(self, future):
+        """从活动任务集合中移除future"""
+        with self.lock:
+            self.active_futures.discard(future)
 
-
+# 创建全局实例
+thread_control = ThreadControl()
 
 def create_table():
     conn = sqlite3.connect('data.db')
@@ -1291,6 +1328,10 @@ def create_cover_from_video(video_path, output_path=None):
 
 
 def process_single_video(args):
+    """处理单个视频的上传"""
+    if thread_control.should_stop():
+        return False
+        
     cookies, file_path, scheduleTime, title, appid, index, delete_original = args
     video_name = os.path.basename(file_path)
     logger.info(f"开始处理视频: {video_name}")
@@ -1301,12 +1342,20 @@ def process_single_video(args):
     retries = 3
     for attempt in range(retries):
         try:
+            # 在关键操作点检查停止信号
+            if thread_control.should_stop():
+                return False
+                
             # 获取mt移到这里
             logger.info(f"获取上传token - {video_name}")
             mt = get_mt(cookies)
             if not mt:
                 raise Exception("获取上传token失败")
 
+            # 生成封面图
+            if thread_control.should_stop():
+                return False
+                
             # 上传视频前先生成封面图
             logger.info(f"正在生成视频封面 - {video_name}")
             cover_path = create_cover_from_video(file_path)
@@ -1319,10 +1368,18 @@ def process_single_video(args):
                     logger.info("默认封面图不存在，跳过此视频")
                     return False
 
+            # 上传视频
+            if thread_control.should_stop():
+                return False
+                
             # 继续处理其他步骤...
             logger.info(f"开始上传视频文件 - {video_name}")
             file_id, videoFileName = upload_4m_video(mt, file_path)
 
+            # 上传封面
+            if thread_control.should_stop():
+                return False
+                
             logger.info(f"开始上传封面图 - {video_name}")
             try:
                 extProperty = upload_pic(cookies, cover_path)
@@ -1334,11 +1391,15 @@ def process_single_video(args):
             logger.info(f"获取视频URL - {video_name}")
             videoFile = get_video_url(file_id, mt)
 
+            # 发布内容
+            if thread_control.should_stop():
+                return False
+                
             logger.info(f"发布视频内容 - {video_name}")
             publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies)
 
             # 根据配置决定是否删除原文件
-            if delete_original:
+            if delete_original and not thread_control.should_stop():
                 # 清理文件
                 os.remove(file_path)
                 cover_path = os.path.splitext(file_path)[0] + '.jpg'
@@ -1372,74 +1433,61 @@ def process_single_video(args):
 
 def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3, appid=None, index=None,
                          max_uploads=None, delete_original=True):
-    cookies = get_sub_cookies(cookies, appid)
-    
-    # 添加视频文件列表定义
-    video_files = [os.path.join(dir_path, f) for f in os.listdir(dir_path) 
-                  if f.lower().endswith(('.mp4', '.mov', '.avi'))]
-    
-    if max_uploads:
-        video_files = video_files[:max_uploads]
-        
-    logger.info(f"找到{len(video_files)}个视频文件")
-
-    """
-    多线程处理视频上传
-    :param cookies: cookies信息
-    :param dir_path: 视频目录路径
-    :param title: 视频标题
-    :param scheduleTime: 定时发布时间（可选）
-    :param max_workers: 最大并发数
-    :param appid: appid
-    :param index: 序号
-    :param max_uploads: 最大上传数量限制（可选）
-    :param delete_original: 是否删除原始视频文件
-    """
-    logger.info(f"""开始处理视频上传任务:
-    - 目录: {dir_path}
-    - 定时发布: {scheduleTime or '立��发布'}
-    - 标题: {title}
-    - 最大并发数: {max_workers}
-    - 最大上传数: {max_uploads or '不限'}
-    - AppID: {appid or '未指定'}
-    - 序号: {index or '未指定'}
-    - 删除原文件: {'是' if delete_original else '否'}
-    """)
     try:
-        # 删除这行，因为mt已经移到线程内部
-        # mt = get_mt(cookies)
+        cookies = get_sub_cookies(cookies, appid)
+        # 重置停止标志
+        thread_control.clear()
         
-        # ... (中间的代码保持不变)
+        video_files = [os.path.join(dir_path, f) for f in os.listdir(dir_path) 
+                      if f.lower().endswith(('.mp4', '.mov', '.avi'))]
+        
+        if max_uploads:
+            video_files = video_files[:max_uploads]
+            
+        logger.info(f"找到{len(video_files)}个视频文件")
+        
+        thread_args = [(cookies, file_path, scheduleTime, title, appid, index, delete_original) 
+                      for file_path in video_files]
 
-        # 修改线程参数，移除mt
-        thread_args = [(cookies, file_path, scheduleTime, title, appid, index, delete_original) for file_path in video_files]
-
-        # ... (后面的代码保持不变)
-
-        # 使用线程池执行上传任务
-        logger.info(f"开始并发上传，并发数: {max_workers}")
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_file = {executor.submit(process_single_video, args): args[1] for args in thread_args}
+            # 提交任务并跟踪futures
+            futures = {}
+            for args in thread_args:
+                if thread_control.should_stop():
+                    logger.info("检测到停止信号，终止提交新任务")
+                    break
+                    
+                future = executor.submit(process_single_video, args)
+                thread_control.add_future(future)
+                futures[future] = args[1]  # 存储文件路径
 
+            # 等待任务完成
             completed = 0
-            for future in concurrent.futures.as_completed(future_to_file):
-                file_path = future_to_file[future]
+            for future in concurrent.futures.as_completed(futures):
+                if thread_control.should_stop():
+                    logger.info("检测到停止信号，正在终止剩余任务")
+                    break
+                    
+                file_path = futures[future]
                 try:
                     success = future.result()
                     completed += 1
                     if success:
-                        logger.info(f"视频处理成功 ({completed}/{len(video_files)}) - {os.path.basename(file_path)}")
+                        logger.info(f"视频处理成功 ({completed}/{len(futures)}) - {os.path.basename(file_path)}")
                     else:
-                        logger.info(f"视频处理失败 ({completed}/{len(video_files)}) - {os.path.basename(file_path)}")
+                        logger.info(f"视频处理失败 ({completed}/{len(futures)}) - {os.path.basename(file_path)}")
+                except concurrent.futures.CancelledError:
+                    logger.info(f"任务被取消 - {os.path.basename(file_path)}")
                 except Exception as e:
-                    logger.info(f"视频处理异常 - {os.path.basename(file_path)}: {str(e)}")
-
-        # 统计最终结果
-        success_count = sum(1 for r in [f.result() for f in future_to_file.keys()] if r)
-        logger.info(f"任务完成 - 成功: {success_count}, 失败: {len(video_files) - success_count}")
+                    logger.error(f"视频处理异常 - {os.path.basename(file_path)}: {str(e)}")
+                finally:
+                    thread_control.remove_future(future)
 
     except Exception as e:
-        logger.info(f"上传任务发生错误: {str(e)}")
+        logger.error(f"上传任务发生错误: {str(e)}")
         raise
+    finally:
+        if thread_control.should_stop():
+            logger.info("上传任务已被终止")
 
 create_table()
