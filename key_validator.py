@@ -5,9 +5,19 @@ from datetime import datetime
 import sys
 import time
 import random
+import logging
 import colorama
 from colorama import Fore, Back, Style
 from PyQt5.QtWidgets import QInputDialog, QMessageBox, QApplication
+import requests
+
+# 配置logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 # 初始化colorama
 colorama.init()
@@ -123,3 +133,118 @@ def verify_key():
             QMessageBox.critical(None, "错误", "无效的秘钥！")
             attempt += 1
     return False 
+
+class KeyValidator:
+    def __init__(self):
+        self.api_url = "https://api.example.com/verify_key"
+        self.key_file = "license.key"
+        
+    def get_machine_info(self):
+        """获取机器信息"""
+        try:
+            import uuid
+            import platform
+            import socket
+            import hashlib
+            
+            # 获取基础信息
+            system_info = {
+                "machine_code": str(uuid.getnode()),  # MAC地址
+                "hostname": socket.gethostname(),     # 主机名
+                "system": platform.system(),          # 操作系统
+                "processor": platform.processor(),    # 处理器
+                "machine": platform.machine(),        # 机器类型
+                "system_version": platform.version()  # 系统版本
+            }
+            
+            # 生成唯一机器码
+            machine_str = ''.join(str(v) for v in system_info.values())
+            unique_id = hashlib.md5(machine_str.encode()).hexdigest()
+            
+            system_info["unique_id"] = unique_id
+            
+            return system_info
+            
+        except Exception as e:
+            logger.error(f"获取机器信息失败: {str(e)}")
+            return None
+
+    def verify_online(self):
+        """在线验证密钥"""
+        try:
+            # 获取存储的密钥
+            key = self.get_stored_key()
+            if not key:
+                from PyQt5.QtWidgets import QInputDialog, QLineEdit
+                key, ok = QInputDialog.getText(None, "输入密钥", 
+                    "请输入授权密钥:", QLineEdit.Password)
+                if not ok or not key:
+                    return False
+            
+            # 获取机器信息
+            machine_info = self.get_machine_info()
+            if not machine_info:
+                return False
+                
+            # 准备请求数据
+            data = {
+                "key": key,                              # 授权密钥
+                "unique_id": machine_info["unique_id"],  # 机器唯一标识
+                "machine_info": {                        # 机器详细信息
+                    "machine_code": machine_info["machine_code"],  # MAC地址
+                    "hostname": machine_info["hostname"],          # 主机名
+                    "system": machine_info["system"],             # 操作系统
+                    "processor": machine_info["processor"],       # 处理器
+                    "machine": machine_info["machine"],          # 机器类型
+                    "system_version": machine_info["system_version"]  # 系统版本
+                },
+                "timestamp": int(time.time()),           # 当前时间戳
+                "version": "1.0.0"                       # 软件版本
+            }
+            
+            # 添加签名
+            sign_str = f"{data['key']}{data['unique_id']}{data['timestamp']}"
+            data["sign"] = hashlib.md5(sign_str.encode()).hexdigest()
+            
+            # 发送验证请求
+            response = requests.post(
+                self.api_url,
+                json=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": f"KeyValidator/1.0 ({machine_info['system']})"
+                },
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    # 验证成功，保存密钥和机器信息
+                    self.save_license_info({
+                        "key": key,
+                        "unique_id": machine_info["unique_id"],
+                        "expire_time": result.get("expire_time"),
+                        "verified_at": int(time.time())
+                    })
+                    return True
+                else:
+                    logger.error(f"密钥验证失败: {result.get('message', '未知错误')}")
+            else:
+                logger.error(f"验证请求失败: HTTP {response.status_code}")
+                
+            return False
+            
+        except Exception as e:
+            logger.error(f"验证过程出错: {str(e)}")
+            return False
+
+    def save_license_info(self, info):
+        """保存授权信息"""
+        try:
+            with open(self.key_file, 'w') as f:
+                json.dump(info, f)
+            return True
+        except Exception as e:
+            logger.error(f"保存授权信息失败: {str(e)}")
+            return False 

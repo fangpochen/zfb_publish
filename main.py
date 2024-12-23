@@ -7,6 +7,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 import zipfile
 from datetime import datetime
+from key_verification import verify_key_with_gui
 
 warnings.filterwarnings("ignore")
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -28,7 +29,7 @@ class Thread(QThread):
     max_workers = 50
     error_signal = pyqtSignal(object)  # 返回异常，并设置cookies失效
     finish_signal = pyqtSignal(object)
-    upload_signal = pyqtSignal(int)  # 但账号上传完成, 上传数量 +1, 参数为所在行序号-1
+    upload_signal = pyqtSignal(int)  # 但账号上传完成, ���传数量 +1, 参数为所在行序号-1
     recommend_signal = pyqtSignal(tuple)  # 更新界面推荐视频数量(账号序号, 推荐数量)
     delete_note_signal = pyqtSignal(tuple)  # 但删除不推荐视频(账号序号, 数量),+n
     running = False
@@ -339,7 +340,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             logger.error(f"日志轮换失败: {str(e)}")
 
     def cleanup_old_logs(self):
-        """清理旧的日志文件，只保留最近10个"""
+        """清理旧的日志文件，只留最近10个"""
         try:
             logs_dir = "logs"
             if not os.path.exists(logs_dir):
@@ -556,7 +557,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         Returns:
         """
         if self.thread.model == 0:
-            QMessageBox.information(self, "完成", "任务领取完成")
+            QMessageBox.information(self, "完成", "任务领取完��")
         if self.thread.model == 1:
             QMessageBox.information(self, "完成", "视频上传完成")
         if self.thread.model == 2:
@@ -656,7 +657,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             # 第三列：账号名称
             self.tableWidget.setItem(i, 2, QTableWidgetItem(df.iloc[i]["user_name"]))
 
-            # 第四列：���荐数
+            # 第四列：推荐数
             self.tableWidget.setItem(i, 3, QTableWidgetItem(str(self.df.iloc[i]["daily_recommendations"])))
             # 第四列：cookies状态
             self.tableWidget.setItem(i, 4, QTableWidgetItem(self.df.iloc[i]["cookies_status"]))
@@ -867,7 +868,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def delete_non_recommended_videos(self):
         """
-        删除平台不推荐视频
+        删除平台��推荐视频
         Returns:
 
         """
@@ -908,18 +909,25 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         return self.df
 
 
-if __name__ == '__main__':
-    # 验证秘钥
-    # if not check_saved_key():
-    #     if not verify_key():
-    #         sys.exit(1)
-    
+def main():
+    # 首先进行密钥验证
+    # if not verify_key_with_gui():
+    #     print("密钥验证失败，程序退出")
+    #     sys.exit(1)
+        
+    # 检查过期时间
     current_date = datetime.now().strftime('%Y-%m-%d')
     expiry_date = '2025-01-01'  # 设置到2025年1月1日
     if current_date >= expiry_date:
+        print("程序已过期")
         sys.exit(0)
-        
+    
+    # 验证成功且未过期，启动主程序
+    print("密钥验证成功，开始运行主程序...")
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
+    
+if __name__ == '__main__':
+    main()
