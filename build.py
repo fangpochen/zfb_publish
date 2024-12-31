@@ -6,7 +6,7 @@ if not os.path.exists('logo.ico'):
     raise FileNotFoundError("logo.ico not found!")
 
 PyInstaller.__main__.run([
-    'main.py',                     # 主程序文件
+    'app.py',                     # 主程序文件
     '--name=视频批量上传',         # 生成的exe名称
     '--windowed',                  # 使用GUI模式
     '--icon=logo.ico',            # 指定图标

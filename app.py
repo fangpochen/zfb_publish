@@ -7,18 +7,18 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 import zipfile
 from datetime import datetime
-from key_verification import verify_key_with_gui
+from key_verification import verify_key
+import multiprocessing
 
 warnings.filterwarnings("ignore")
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QBrush, QColor, QPainter, QFont, QIcon
 from PyQt5.QtWidgets import QMainWindow, QApplication, QTableWidgetItem, QCheckBox, QHBoxLayout, QWidget, QPushButton, \
-    QFileDialog, QMessageBox, QAbstractItemView
+    QFileDialog, QMessageBox, QAbstractItemView, QVBoxLayout, QLabel, QLineEdit
 from ui.ui import Ui_MainWindow
 from zfb import *
 import pandas as pd
 from db import update_existing_fields, delete_records_by_appids
-from key_validator import check_saved_key, verify_key 
 
 conn = sqlite3.connect('data.db')
 
@@ -295,6 +295,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.log_check_timer.timeout.connect(self.check_and_rotate_log)
             self.log_check_timer.start(300000)  # 每5分钟检查一次
             
+            # 在 horizontalLayout_2 中添加 Chrome 配置按钮
+            self.chrome_config_button = QPushButton("配置Chrome路径")
+            self.chrome_config_button.clicked.connect(self.configure_chrome_path)
+            self.horizontalLayout_2.addWidget(self.chrome_config_button)
+
         except Exception as e:
             logger.error(f"主窗口初始化失败: {str(e)}")
             print(f"初始化失败: {str(e)}")
@@ -557,7 +562,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         Returns:
         """
         if self.thread.model == 0:
-            QMessageBox.information(self, "完成", "任务领取完��")
+            QMessageBox.information(self, "完成", "任务领取完成")
         if self.thread.model == 1:
             QMessageBox.information(self, "完成", "视频上传完成")
         if self.thread.model == 2:
@@ -908,26 +913,176 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         return self.df
 
+    def configure_chrome_path(self):
+        try:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "选择Chrome可执行文件",
+                "",
+                "Chrome Executable (chrome.exe);;All Files (*)"
+            )
+            
+            if file_path:
+                config = {}
+                if os.path.exists('config.json'):
+                    with open('config.json', 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                
+                config['chrome_path'] = file_path
+                
+                with open('config.json', 'w', encoding='utf-8') as f:
+                    json.dump(config, f, ensure_ascii=False, indent=4)
+                
+                QMessageBox.information(self, "成功", "Chrome路径配置已保存！")
+                logger.info(f"Chrome路径已配置为: {file_path}")
+        except Exception as e:
+            logger.error(f"配置Chrome路径失败: {str(e)}")
+            QMessageBox.warning(self, "错误", f"配置失败: {str(e)}")
+
 
 def main():
-    # 首先进行密钥验证
-    # if not verify_key_with_gui():
-    #     print("密钥验证失败，程序退出")
-    #     sys.exit(1)
+    # 在最开始添加这个检查
+    if '--multiprocessing-fork' in sys.argv:
+        logger.info("检测到子进程启动，跳过验证")
+        window = MainWindow()
+        window.show()
+        return QApplication.instance().exec_()
         
-    # 检查过期时间
-    current_date = datetime.now().strftime('%Y-%m-%d')
-    expiry_date = '2025-01-01'  # 设置到2025年1月1日
-    if current_date >= expiry_date:
-        print("程序已过期")
-        sys.exit(0)
+    logger.info("=================== 程序启动 ===================")
+    logger.info(f"进程ID: {os.getpid()}")
+    logger.info(f"Python路径: {sys.executable}")
     
-    # 验证成功且未过期，启动主程序
-    print("密钥验证成功，开始运行主程序...")
-    app = QApplication(sys.argv)
+    # 先创建 QApplication 实例
+    app = QApplication.instance()
+    if app is None:
+        logger.debug("创建新的 QApplication 实例")
+        app = QApplication(sys.argv)
+    else:
+        logger.warning("检测到已存在的 QApplication 实例")
+    
+    # 检查已保存的密钥
+    key_file = '.keyconfig'
+    if os.path.exists(key_file):
+        try:
+            with open(key_file, 'r') as f:
+                data = json.load(f)
+                saved_key = data.get('key')
+                if saved_key:
+                    logger.debug("找到已保存的密钥，尝试验证")
+                    if verify_key(saved_key):
+                        logger.info("已保存的密钥验证成功")
+                        window = MainWindow()
+                        window.show()
+                        return app.exec_()
+        except Exception as e:
+            logger.error(f"加载密钥失败: {str(e)}")
+    
+    # 如果没有有效的已保存密钥，显示验证窗口
+    verified = False
+    logger.debug("开始创建验证窗口")
+    
+    # 创建验证窗口
+    verify_window = QMainWindow()
+    verify_window.setWindowTitle('API密钥验证')
+    verify_window.setFixedSize(400, 200)
+    
+    # 创建中心部件
+    central_widget = QWidget()
+    verify_window.setCentralWidget(central_widget)
+    
+    # 创建布局
+    layout = QVBoxLayout(central_widget)
+    layout.setSpacing(10)
+    layout.setContentsMargins(20, 20, 20, 20)
+    
+    # 添加控件
+    title_label = QLabel('请输入API密钥进行验证')
+    title_label.setAlignment(Qt.AlignCenter)
+    layout.addWidget(title_label)
+    
+    key_input = QLineEdit()
+    key_input.setPlaceholderText('在此输入您的API密钥')
+    layout.addWidget(key_input)
+    
+    remember_checkbox = QCheckBox('记住密钥')
+    remember_checkbox.setChecked(True)
+    layout.addWidget(remember_checkbox)
+    
+    status_label = QLabel('')
+    status_label.setAlignment(Qt.AlignCenter)
+    layout.addWidget(status_label)
+    
+    # 加载保存的密钥
+    key_file = '.keyconfig'
+    if os.path.exists(key_file):
+        try:
+            with open(key_file, 'r') as f:
+                data = json.load(f)
+                if data.get('key'):
+                    key_input.setText(data['key'])
+                    logger.debug("已加载保存的密钥")
+        except Exception as e:
+            logger.error(f"加载密钥失败: {str(e)}")
+    
+    def verify():
+        nonlocal verified
+        logger.debug("开始验证密钥")
+        api_key = key_input.text().strip()
+        if not api_key:
+            logger.warning("未输入密钥")
+            QMessageBox.warning(verify_window, '警告', '请输入API密钥')
+            return
+            
+        status_label.setText('正在验证...')
+        QApplication.processEvents()
+        
+        logger.debug("发送验证请求")
+        if verify_key(api_key):
+            logger.info("密钥验证成功")
+            QMessageBox.information(verify_window, '成功', '密钥验证成功！')
+            if remember_checkbox.isChecked():
+                try:
+                    data = {
+                        "key": api_key,
+                        "timestamp": str(datetime.now())
+                    }
+                    with open(key_file, 'w') as f:
+                        json.dump(data, f)
+                    logger.debug("密钥已保存到配置文件")
+                except Exception as e:
+                    logger.error(f"保存密钥失败: {str(e)}")
+            verified = True
+            verify_window.close()
+        else:
+            logger.warning("密钥验证失败")
+            status_label.setText('验证失败')
+            QMessageBox.critical(verify_window, '错误', '密钥验证失败，请检查后重试')
+    
+    verify_button = QPushButton('验证')
+    verify_button.clicked.connect(verify)
+    layout.addWidget(verify_button)
+    
+    logger.debug("显示验证窗口")
+    verify_window.show()
+    
+    # 只在验证窗口运行时执行事件循环
+    while not verified and verify_window.isVisible():
+        app.processEvents()
+    
+    # 验证失败则退出
+    if not verified:
+        logger.error("密钥验证失败，程序退出")
+        sys.exit(1)
+    
+    # 验证成功后创建主窗口
+    logger.info("开始创建主窗口") 
     window = MainWindow()
     window.show()
-    sys.exit(app.exec_())
     
+    logger.debug("进入主事件循环")
+    return app.exec_()
+
 if __name__ == '__main__':
-    main()
+    logger.info(f"脚本路径: {os.path.abspath(__file__)}")
+    logger.info(f"命令行参数: {sys.argv}")
+    sys.exit(main())

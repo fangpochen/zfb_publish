@@ -147,8 +147,27 @@ def login():
     ''''
     return :返回cookie和保持cookie所用的请求数据data
     '''
+    # 获取 Chrome 路径
+    chrome_path = None
+    if os.path.exists('config.json'):
+        try:
+            with open('config.json', 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                chrome_path = config.get('chrome_path')
+        except Exception as e:
+            logger.error(f"读取Chrome配置失败: {str(e)}")
+    
+    # 设置 ChromiumOptions
     co = ChromiumOptions().auto_port()
     co.set_argument('--window-size', '800,600')
+    
+    # 如果有配置的 Chrome 路径，使用它
+    if chrome_path and os.path.exists(chrome_path):
+        co.set_browser_path(chrome_path)
+        logger.info(f"使用配置的Chrome路径: {chrome_path}")
+    else:
+        logger.warning("未找到配置的Chrome路径，使用默认路径")
+    
     page = ChromiumPage(co)
     page.set.cookies.clear()
     page.get('https://c.alipay.com/page/portal/home')
@@ -185,7 +204,7 @@ def login():
     exists = cursor.fetchone()[0] > 0
     
     if exists:
-        # 如果存在相同appid，更新所有账号的cookies
+        # 如���存在相同appid，更新所有账号的cookies
         logger.info(f"检测到已存在appid: {appid}, 更新所有账号cookies")
         cursor.execute('''
             UPDATE user_data 
@@ -1173,9 +1192,9 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, s
     }
 
     # 只有当 scheduleTime 有值时才添加到 json_data
-    #scheduleTime: "2024-12-18 06:16"
     if scheduleTime:
         json_data['scheduleTime'] = format_time_string(scheduleTime)
+        
     response = requests.post(
         'https://contentweb.alipay.com/life/publishShortVideo.json',
         params=params,
@@ -1183,7 +1202,18 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, s
         headers=headers,
         json=json_data,
     )
-    logger.info(response.text)
+    
+    response_data = json.loads(response.text)
+    logger.info(f'发布响应: {response.text}')
+    
+    # 检查发布状态
+    if response_data.get('stat') == 'failed':
+        error_message = response_data.get('errorMessage', '未知错误')
+        error_code = response_data.get('errorCode', 'unknown')
+        logger.error(f'发布失败 - 错误码: {error_code}, 错误信息: {error_message}')
+        raise Exception(f'发布失败: {error_message}')
+        
+    return response_data
 
 
 def get_app_id(cookies):
