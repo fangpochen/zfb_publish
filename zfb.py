@@ -18,6 +18,7 @@ from DrissionPage import ChromiumPage, ChromiumOptions
 import threading
 import logging
 from concurrent.futures import ThreadPoolExecutor
+import shutil
 
 # 限制每分钟最多处理2个视频
 ONE_MINUTE = 60
@@ -1058,7 +1059,7 @@ def upload_pic(cookies, video_file_path):
         return json.loads(response.text).get('extProperty')
 
 
-def get_video_url(file_id, mt, max_retries=60, retry_interval=5):
+def get_video_url(file_id, mt, max_retries=30, retry_interval=5):
     """
     获取视频URL,失败时5分钟内每5秒重试一次
 
@@ -1378,26 +1379,28 @@ def process_single_video(args):
     cookies, file_path, scheduleTime, title, appid, index, delete_original = args
     video_name = os.path.basename(file_path)
     logger.info(f"开始处理视频: {video_name}")
-# 验证定时发布时间
-    if scheduleTime:
-        try:
-            # 支持两种格式：带秒的完整格式和不带秒的简化格式
-            try:
-                schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M:%S')
-            except ValueError:
-                schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M')
-                
-            current_datetime = datetime.now()
-            if schedule_datetime <= current_datetime:
-                logger.error(f"定时发布时间 {scheduleTime} 小于当前时间，跳过上传")
-                raise Exception("定时发布时间不能小于当前时间")
-        except ValueError as e:
-            logger.error(f"时间格式错误: {str(e)}")
-            raise Exception("时间格式错误，请使用 YYYY-MM-DD HH:MM 或 YYYY-MM-DD HH:MM:SS 格式")
 
-    # 设置默认封面图路径
-    default_cover = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_cover.jpg")
     try:
+        # 验证定时发布时间
+        if scheduleTime:
+            try:
+                # 支持两种格式：带秒的完整格式和不带秒的简化格式
+                try:
+                    schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M')
+                    
+                current_datetime = datetime.now()
+                if schedule_datetime <= current_datetime:
+                    logger.error(f"定时发布时间 {scheduleTime} 小于当前时间，跳过上传")
+                    raise Exception("定时发布时间不能小于当前时间")
+            except ValueError as e:
+                logger.error(f"时间格式错误: {str(e)}")
+                raise Exception("时间格式错误，请使用 YYYY-MM-DD HH:MM 或 YYYY-MM-DD HH:MM:SS 格式")
+
+        # 设置默认封面图路径
+        default_cover = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_cover.jpg")
+        
         # 在关键操作点检查停止信号
         if thread_control.should_stop():
             return False
@@ -1472,10 +1475,30 @@ def process_single_video(args):
 
     except Exception as e:
         logger.error(f"视频处理失败 - {video_name}: {str(e)}")
-        return False
-    finally:
-        # 清理临时文件
+        
+        # 创建主failed目录
+        root_failed_dir = os.path.join(os.path.dirname(os.path.dirname(file_path)), "failed")
+        os.makedirs(root_failed_dir, exist_ok=True)
+        
+        # 获取原始目录名作为子目录名
+        original_dir_name = os.path.basename(os.path.dirname(file_path))
+        sub_failed_dir = os.path.join(root_failed_dir, original_dir_name)
+        os.makedirs(sub_failed_dir, exist_ok=True)
+        
+        # 移动失败的视频到对应的failed子目录
+        failed_video_path = os.path.join(sub_failed_dir, video_name)
         try:
+            shutil.move(file_path, failed_video_path)
+            logger.info(f"已将失败视频移动到: {failed_video_path}")
+        except Exception as move_error:
+            logger.error(f"移动失败文件时出错: {str(move_error)}")
+            
+        return False
+        
+    finally:
+        # 清理临时文件（包括封面）
+        try:
+            cover_path = os.path.splitext(file_path)[0] + '.jpg'
             if os.path.exists(cover_path) and cover_path != "default_cover.jpg":
                 os.remove(cover_path)
         except Exception as e:
