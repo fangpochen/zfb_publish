@@ -461,7 +461,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             df = df[df["is_main_account"] == 1]
             for i in range(df.shape[0]):
                 request_all = ast.literal_eval(df.loc[i, "request_all"])
-                keep_cookies(request_all)
+                cookies = df.loc[i, "cookies"]
+                appid = df.loc[i, "appid"]
+                keep_cookies(request_all, cookies, appid)
         except Exception as e:
             print(e)
 
@@ -946,7 +948,20 @@ def show_key_verification():
         bool: True 表示验证成功，False 表示验证失败
     """
     try:
-        # 先创建 QApplication 实例
+        # 先检查是否有保存的密钥
+        key_file = '.keyconfig'
+        if os.path.exists(key_file):
+            try:
+                with open(key_file, 'r') as f:
+                    data = json.load(f)
+                    saved_key = data.get('key')
+                    if saved_key and verify_key(saved_key):
+                        logger.info("使用已保存的密钥验证成功")
+                        return True
+            except Exception as e:
+                logger.error(f"读取保存的密钥失败: {str(e)}")
+        
+        # 如果没有有效的保存密钥，显示验证窗口
         app = QApplication.instance()
         if app is None:
             logger.debug("创建新的 QApplication 实例")

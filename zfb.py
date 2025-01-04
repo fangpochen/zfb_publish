@@ -18,6 +18,7 @@ from DrissionPage import ChromiumPage, ChromiumOptions
 import threading
 import logging
 from concurrent.futures import ThreadPoolExecutor
+import shutil
 
 # 限制每分钟最多处理2个视频
 ONE_MINUTE = 60
@@ -417,10 +418,18 @@ def get_operator(cookies, appid):
 
 
 # 保持主账号cookie
-def keep_cookies(request_all):
+def keep_cookies(request_all, cookies=None, appid=None):
     '''
-      :param 账号的request_all,类型为列表
-      '''
+    :param request_all: 账号的request_all,类型为列表
+    :param cookies: 数据库中的cookies
+    :param appid: 主账号的appid
+    '''
+    # 先调用get_public_list保持登录状态
+    if cookies and appid:
+        cookies_dict = json.loads(cookies) if isinstance(cookies, str) else cookies
+        get_public_list(cookies_dict, appid, 'recommend', False, None)
+        logger.info(f"使用appid={appid}调用保持登录")
+    
     headers = {
         'accept': '*/*',
         'accept-language': 'zh-CN,zh;q=0.9,en-GB;q=0.8,en;q=0.7,en-US;q=0.6',
@@ -438,6 +447,7 @@ def keep_cookies(request_all):
         'sec-fetch-site': 'same-site',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
     }
+    
     for request_param in request_all:
         url = request_param.get('url')
         data = request_param.get('data')
@@ -447,10 +457,10 @@ def keep_cookies(request_all):
         code = jsondata['code']
         code_v2 = jsondata['code_v2']
         if code == 200 and code_v2 == 200:
-            # print('触发点击事件1:',code,code_v2)
+            logger.info("触发点击事件成功")
             return True
         else:
-            # print('触发点击事件2:', code, code_v2)
+            logger.warning("触发点击事件失败")
             return False
 
 
@@ -1058,7 +1068,7 @@ def upload_pic(cookies, video_file_path):
         return json.loads(response.text).get('extProperty')
 
 
-def get_video_url(file_id, mt, max_retries=60, retry_interval=5):
+def get_video_url(file_id, mt, max_retries=30, retry_interval=5):
     """
     获取视频URL,失败时5分钟内每5秒重试一次
 
@@ -1378,26 +1388,28 @@ def process_single_video(args):
     cookies, file_path, scheduleTime, title, appid, index, delete_original = args
     video_name = os.path.basename(file_path)
     logger.info(f"开始处理视频: {video_name}")
-# 验证定时发布时间
-    if scheduleTime:
-        try:
-            # 支持两种格式：带秒的完整格式和不带秒的简化格式
-            try:
-                schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M:%S')
-            except ValueError:
-                schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M')
-                
-            current_datetime = datetime.now()
-            if schedule_datetime <= current_datetime:
-                logger.error(f"定时发布时间 {scheduleTime} 小于当前时间，跳过上传")
-                raise Exception("定时发布时间不能小于当前时间")
-        except ValueError as e:
-            logger.error(f"时间格式错误: {str(e)}")
-            raise Exception("时间格式错误，请使用 YYYY-MM-DD HH:MM 或 YYYY-MM-DD HH:MM:SS 格式")
 
-    # 设置默认封面图路径
-    default_cover = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_cover.jpg")
     try:
+        # 验证定时发布时间
+        if scheduleTime:
+            try:
+                # 支持两种格式：带秒的完整格式和不带秒的简化格式
+                try:
+                    schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M')
+                    
+                current_datetime = datetime.now()
+                if schedule_datetime <= current_datetime:
+                    logger.error(f"定时发布时间 {scheduleTime} 小于当前时间，跳过上传")
+                    raise Exception("定时发布时间不能小于当前时间")
+            except ValueError as e:
+                logger.error(f"时间格式错误: {str(e)}")
+                raise Exception("时间格式错误，请使用 YYYY-MM-DD HH:MM 或 YYYY-MM-DD HH:MM:SS 格式")
+
+        # 设置默认封面图路径
+        default_cover = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_cover.jpg")
+        
         # 在关键操作点检查停止信号
         if thread_control.should_stop():
             return False
@@ -1406,8 +1418,9 @@ def process_single_video(args):
         logger.info(f"获取上传token - {video_name}")
         mt = get_mt(cookies)
         if not mt:
-            raise Exception("获取上传token失败")
-
+            logger.error("获取上传token失败")
+            return False  # 直接返回False，不移动文件
+            
         # 生成封面图
         if thread_control.should_stop():
             return False
@@ -1472,10 +1485,38 @@ def process_single_video(args):
 
     except Exception as e:
         logger.error(f"视频处理失败 - {video_name}: {str(e)}")
-        return False
-    finally:
-        # 清理临时文件
+        
+        # 如果是token获取失败，不移动文件
+        if "获取上传token失败" in str(e):
+            return False
+            
+        # 检查当前目录是否已经是failed目录
+        current_dir = os.path.basename(os.path.dirname(file_path))
+        if current_dir == "failed":
+            logger.info(f"文件已在failed目录中，无需移动: {file_path}")
+            return False
+            
+        # 其他错误则移动文件到failed目录
+        root_failed_dir = os.path.join(os.path.dirname(os.path.dirname(file_path)), "failed")
+        os.makedirs(root_failed_dir, exist_ok=True)
+        
+        original_dir_name = os.path.basename(os.path.dirname(file_path))
+        sub_failed_dir = os.path.join(root_failed_dir, original_dir_name)
+        os.makedirs(sub_failed_dir, exist_ok=True)
+        
+        failed_video_path = os.path.join(sub_failed_dir, video_name)
         try:
+            shutil.move(file_path, failed_video_path)
+            logger.info(f"已将失败视频移动到: {failed_video_path}")
+        except Exception as move_error:
+            logger.error(f"移动失败文件时出错: {str(move_error)}")
+            
+        return False
+        
+    finally:
+        # 清理临时文件（包括封面）
+        try:
+            cover_path = os.path.splitext(file_path)[0] + '.jpg'
             if os.path.exists(cover_path) and cover_path != "default_cover.jpg":
                 os.remove(cover_path)
         except Exception as e:

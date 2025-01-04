@@ -1,17 +1,28 @@
 import logging
+import os
+from logging.handlers import RotatingFileHandler
 
-# 创建一个文件处理器并指定编码为 UTF-8
-file_handler = logging.FileHandler('log.log', encoding='utf-8')
+# 创建logger对象
+logger = logging.getLogger('app')
+logger.setLevel(logging.INFO)  # 设置为INFO级别
 
-# 创建一个日志格式器
-formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+# 创建文件处理器
+if not os.path.exists('log.log'):
+    open('log.log', 'w').close()
+
+file_handler = RotatingFileHandler(
+    'log.log',
+    maxBytes=5*1024*1024,  # 5MB
+    backupCount=5,
+    encoding='utf-8'
+)
+file_handler.setLevel(logging.INFO)  # 文件处理器也设置为INFO级别
+
+# 创建格式化器
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 file_handler.setFormatter(formatter)
 
-# 获取根日志器并设置级别
-logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
-
-# 将文件处理器添加到根日志器
+# 添加处理器到logger
 logger.addHandler(file_handler)
 
 
