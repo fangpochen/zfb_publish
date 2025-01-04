@@ -940,149 +940,121 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             QMessageBox.warning(self, "错误", f"配置失败: {str(e)}")
 
 
-def main():
-    # 在最开始添加这个检查
-    if '--multiprocessing-fork' in sys.argv:
-        logger.info("检测到子进程启动，跳过验证")
-        window = MainWindow()
-        window.show()
-        return QApplication.instance().exec_()
+def show_key_verification():
+    """显示密钥验证窗口
+    Returns:
+        bool: True 表示验证成功，False 表示验证失败
+    """
+    try:
+        # 先创建 QApplication 实例
+        app = QApplication.instance()
+        if app is None:
+            logger.debug("创建新的 QApplication 实例")
+            app = QApplication(sys.argv)
         
+        verified = False
+        
+        # 创建验证窗口
+        verify_window = QMainWindow()
+        verify_window.setWindowTitle('API密钥验证')
+        verify_window.setFixedSize(400, 200)
+        
+        # 创建中心部件
+        central_widget = QWidget()
+        verify_window.setCentralWidget(central_widget)
+        
+        # 创建布局
+        layout = QVBoxLayout(central_widget)
+        layout.setSpacing(10)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # 添加控件
+        title_label = QLabel('请输入API密钥进行验证')
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+        
+        key_input = QLineEdit()
+        key_input.setPlaceholderText('在此输入您的API密钥')
+        layout.addWidget(key_input)
+        
+        remember_checkbox = QCheckBox('记住密钥')
+        remember_checkbox.setChecked(True)
+        layout.addWidget(remember_checkbox)
+        
+        status_label = QLabel('')
+        status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(status_label)
+        
+        def verify():
+            nonlocal verified
+            api_key = key_input.text().strip()
+            if not api_key:
+                QMessageBox.warning(verify_window, '警告', '请输入API密钥')
+                return
+                
+            status_label.setText('正在验证...')
+            QApplication.processEvents()
+            
+            if verify_key(api_key):
+                QMessageBox.information(verify_window, '成功', '密钥验证成功！')
+                if remember_checkbox.isChecked():
+                    try:
+                        data = {
+                            "key": api_key,
+                            "timestamp": str(datetime.now())
+                        }
+                        with open('.keyconfig', 'w') as f:
+                            json.dump(data, f)
+                        logger.debug("密钥已保存到配置文件")
+                    except Exception as e:
+                        logger.error(f"保存密钥失败: {str(e)}")
+                verified = True
+                verify_window.close()
+            else:
+                status_label.setText('验证失败')
+                QMessageBox.critical(verify_window, '错误', '密钥验证失败，请检查后重试')
+        
+        verify_button = QPushButton('验证')
+        verify_button.clicked.connect(verify)
+        layout.addWidget(verify_button)
+        
+        verify_window.show()
+        
+        # 只在验证窗口运行时执行事件循环
+        while not verified and verify_window.isVisible():
+            app.processEvents()
+            
+        return verified
+        
+    except Exception as e:
+        logger.error(f"验证窗口创建失败: {str(e)}")
+        return False
+
+
+def main():
     logger.info("=================== 程序启动 ===================")
-    logger.info(f"进程ID: {os.getpid()}")
-    logger.info(f"Python路径: {sys.executable}")
     
-    # 先创建 QApplication 实例
+    # 确保在创建任何窗口之前先创建 QApplication
     app = QApplication.instance()
     if app is None:
         logger.debug("创建新的 QApplication 实例")
         app = QApplication(sys.argv)
-    else:
-        logger.warning("检测到已存在的 QApplication 实例")
     
-    # 检查已保存的密钥
-    key_file = '.keyconfig'
-    if os.path.exists(key_file):
-        try:
-            with open(key_file, 'r') as f:
-                data = json.load(f)
-                saved_key = data.get('key')
-                if saved_key:
-                    logger.debug("找到已保存的密钥，尝试验证")
-                    if verify_key(saved_key):
-                        logger.info("已保存的密钥验证成功")
-                        window = MainWindow()
-                        window.show()
-                        return app.exec_()
-        except Exception as e:
-            logger.error(f"加载密钥失败: {str(e)}")
+    # 是否启用密钥验证（可以通过配置文件或其他方式控制）
+    ENABLE_KEY_VERIFICATION = False  # 设置为 False 可以禁用密钥验证
     
-    # 如果没有有效的已保存密钥，显示验证窗口
-    verified = False
-    logger.debug("开始创建验证窗口")
+    if ENABLE_KEY_VERIFICATION:
+        if not show_key_verification():
+            logger.error("密钥验证失败，程序退出")
+            sys.exit(1)
     
-    # 创建验证窗口
-    verify_window = QMainWindow()
-    verify_window.setWindowTitle('API密钥验证')
-    verify_window.setFixedSize(400, 200)
-    
-    # 创建中心部件
-    central_widget = QWidget()
-    verify_window.setCentralWidget(central_widget)
-    
-    # 创建布局
-    layout = QVBoxLayout(central_widget)
-    layout.setSpacing(10)
-    layout.setContentsMargins(20, 20, 20, 20)
-    
-    # 添加控件
-    title_label = QLabel('请输入API密钥进行验证')
-    title_label.setAlignment(Qt.AlignCenter)
-    layout.addWidget(title_label)
-    
-    key_input = QLineEdit()
-    key_input.setPlaceholderText('在此输入您的API密钥')
-    layout.addWidget(key_input)
-    
-    remember_checkbox = QCheckBox('记住密钥')
-    remember_checkbox.setChecked(True)
-    layout.addWidget(remember_checkbox)
-    
-    status_label = QLabel('')
-    status_label.setAlignment(Qt.AlignCenter)
-    layout.addWidget(status_label)
-    
-    # 加载保存的密钥
-    key_file = '.keyconfig'
-    if os.path.exists(key_file):
-        try:
-            with open(key_file, 'r') as f:
-                data = json.load(f)
-                if data.get('key'):
-                    key_input.setText(data['key'])
-                    logger.debug("已加载保存的密钥")
-        except Exception as e:
-            logger.error(f"加载密钥失败: {str(e)}")
-    
-    def verify():
-        nonlocal verified
-        logger.debug("开始验证密钥")
-        api_key = key_input.text().strip()
-        if not api_key:
-            logger.warning("未输入密钥")
-            QMessageBox.warning(verify_window, '警告', '请输入API密钥')
-            return
-            
-        status_label.setText('正在验证...')
-        QApplication.processEvents()
-        
-        logger.debug("发送验证请求")
-        if verify_key(api_key):
-            logger.info("密钥验证成功")
-            QMessageBox.information(verify_window, '成功', '密钥验证成功！')
-            if remember_checkbox.isChecked():
-                try:
-                    data = {
-                        "key": api_key,
-                        "timestamp": str(datetime.now())
-                    }
-                    with open(key_file, 'w') as f:
-                        json.dump(data, f)
-                    logger.debug("密钥已保存到配置文件")
-                except Exception as e:
-                    logger.error(f"保存密钥失败: {str(e)}")
-            verified = True
-            verify_window.close()
-        else:
-            logger.warning("密钥验证失败")
-            status_label.setText('验证失败')
-            QMessageBox.critical(verify_window, '错误', '密钥验证失败，请检查后重试')
-    
-    verify_button = QPushButton('验证')
-    verify_button.clicked.connect(verify)
-    layout.addWidget(verify_button)
-    
-    logger.debug("显示验证窗口")
-    verify_window.show()
-    
-    # 只在验证窗口运行时执行事件循环
-    while not verified and verify_window.isVisible():
-        app.processEvents()
-    
-    # 验证失败则退出
-    if not verified:
-        logger.error("密钥验证失败，程序退出")
-        sys.exit(1)
-    
-    # 验证成功后创建主窗口
-    logger.info("开始创建主窗口") 
+    # 创建并显示主窗口
     window = MainWindow()
     window.show()
-    
-    logger.debug("进入主事件循环")
     return app.exec_()
 
 if __name__ == '__main__':
+    multiprocessing.freeze_support()
     logger.info(f"脚本路径: {os.path.abspath(__file__)}")
     logger.info(f"命令行参数: {sys.argv}")
     sys.exit(main())

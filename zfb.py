@@ -1060,7 +1060,7 @@ def upload_pic(cookies, video_file_path):
 
 def get_video_url(file_id, mt, max_retries=60, retry_interval=5):
     """
-    获取视频URL,失败时��5分钟内每5秒重试一次
+    获取视频URL,失败时5分钟内每5秒重试一次
 
     Args:
         file_id: 文件ID
@@ -1305,36 +1305,49 @@ def create_cover_from_video(video_path, output_path=None):
             from PIL import Image
             img = Image.fromarray(frame_rgb)
             
-            # 调整图片尺寸为2030x2700，保持宽高比
-            target_width = 2030
-            target_height = 2700
+            # 获取原始尺寸
+            original_width = img.width
+            original_height = img.height
             
-            # 计算原始宽高比
-            original_ratio = img.width / img.height
-            target_ratio = target_width / target_height
+            # 判断是否为横屏视频
+            is_landscape = original_width > original_height
             
-            if original_ratio > target_ratio:
-                # 原图较宽，以高度为基准进行缩放
-                new_height = target_height
-                new_width = int(target_height * original_ratio)
-                resize_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                # 从中心裁剪
-                left = (new_width - target_width) // 2
-                right = left + target_width
-                crop_img = resize_img.crop((left, 0, right, target_height))
+            if is_landscape:
+                # 横屏视频：保持原始宽高比
+                target_height = 1080  # 设置目标高度
+                target_width = int(target_height * (original_width / original_height))
+                resize_img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
             else:
-                # 原图较高，以宽度为基准进行缩放
-                new_width = target_width
-                new_height = int(target_width / original_ratio)
-                resize_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                # 从中心裁剪
-                top = (new_height - target_height) // 2
-                bottom = top + target_height
-                crop_img = resize_img.crop((0, top, target_width, bottom))
+                # 竖屏视频：使用之前的 2030x2700 比例
+                target_width = 2030
+                target_height = 2700
+                
+                # 计算原始宽高比
+                original_ratio = original_width / original_height
+                target_ratio = target_width / target_height
+                
+                if original_ratio > target_ratio:
+                    # 原图较宽，以高度为基准进行缩放
+                    new_height = target_height
+                    new_width = int(target_height * original_ratio)
+                    resize_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    # 从中心裁剪
+                    left = (new_width - target_width) // 2
+                    right = left + target_width
+                    resize_img = resize_img.crop((left, 0, right, target_height))
+                else:
+                    # 原图较高，以宽度为基准进行缩放
+                    new_width = target_width
+                    new_height = int(target_width / original_ratio)
+                    resize_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    # 从中心裁剪
+                    top = (new_height - target_height) // 2
+                    bottom = top + target_height
+                    resize_img = resize_img.crop((0, top, target_width, bottom))
             
             # 保存调整后的图片
             try:
-                crop_img.save(output_path, "JPEG", quality=95)
+                resize_img.save(output_path, "JPEG", quality=95)
                 logger.info(f"使用PIL保存图片成功: {output_path}")
 
                 if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
@@ -1365,100 +1378,108 @@ def process_single_video(args):
     cookies, file_path, scheduleTime, title, appid, index, delete_original = args
     video_name = os.path.basename(file_path)
     logger.info(f"开始处理视频: {video_name}")
+# 验证定时发布时间
+    if scheduleTime:
+        try:
+            # 支持两种格式：带秒的完整格式和不带秒的简化格式
+            try:
+                schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M')
+                
+            current_datetime = datetime.now()
+            if schedule_datetime <= current_datetime:
+                logger.error(f"定时发布时间 {scheduleTime} 小于当前时间，跳过上传")
+                raise Exception("定时发布时间不能小于当前时间")
+        except ValueError as e:
+            logger.error(f"时间格式错误: {str(e)}")
+            raise Exception("时间格式错误，请使用 YYYY-MM-DD HH:MM 或 YYYY-MM-DD HH:MM:SS 格式")
 
     # 设置默认封面图路径
     default_cover = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_cover.jpg")
-
-    retries = 3
-    for attempt in range(retries):
-        try:
-            # 在关键操作点检查停止信号
-            if thread_control.should_stop():
-                return False
-                
-            # 获取mt移到这里
-            logger.info(f"获取上传token - {video_name}")
-            mt = get_mt(cookies)
-            if not mt:
-                raise Exception("获取上传token失败")
-
-            # 生成封面图
-            if thread_control.should_stop():
-                return False
-                
-            # 上传视频前先生成封面图
-            logger.info(f"正在生成视频封面 - {video_name}")
-            cover_path = create_cover_from_video(file_path)
-
-            if not cover_path or not os.path.exists(cover_path):
-                logger.info(f"无法生成视频封面，将使用默认封面 - {video_name}")
-                if os.path.exists(default_cover):
-                    cover_path = default_cover
-                else:
-                    logger.info("默认封面图不存在，跳过此视频")
-                    return False
-
-            # 上传视频
-            if thread_control.should_stop():
-                return False
-                
-            # 继续处理其他步骤...
-            logger.info(f"开始上传视频文件 - {video_name}")
-            file_id, videoFileName = upload_4m_video(mt, file_path)
-
-            # 上传封面
-            if thread_control.should_stop():
-                return False
-                
-            logger.info(f"开始上传封面图 - {video_name}")
-            try:
-                extProperty = upload_pic(cookies, cover_path)
-            except Exception as e:
-                logger.info(f"封面图上传失败 - {video_name}: {str(e)}")
-                extProperty = upload_pic(cookies, "default_cover.jpg")
-
-            appid = get_app_id(cookies)
-            logger.info(f"获取视频URL - {video_name}")
-            videoFile = get_video_url(file_id, mt)
-
-            # 发布内容
-            if thread_control.should_stop():
-                return False
-                
-            logger.info(f"发布视频内容 - {video_name}")
-            publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies)
-
-            # 根据配置决定是否删除原文件
-            if delete_original and not thread_control.should_stop():
-                # 清理文件
-                os.remove(file_path)
-                cover_path = os.path.splitext(file_path)[0] + '.jpg'
-                if os.path.exists(cover_path):
-                    os.remove(cover_path)
-                    logger.info(f"清理临时文件完成 - {video_name}")
-            else:
-                logger.info(f"保留原始视频文件 - {video_name}")
-
-            if appid:
-                update_uploads_and_files(appid)
-
-            logger.info(f"视频处理成功 - {video_name}")
-            return True
-
-        except Exception as e:
-            logger.info(f"视频处理失败 - {video_name}: {str(e)}")
-            if attempt < retries - 1:
-                logger.info(f"等待重试 - {video_name}")
-                time.sleep(10 * (attempt + 1))
-                continue
+    try:
+        # 在关键操作点检查停止信号
+        if thread_control.should_stop():
             return False
-        finally:
-            # 清理临时文件
-            try:
-                if os.path.exists(cover_path) and cover_path != "default_cover.jpg":
-                    os.remove(cover_path)
-            except Exception as e:
-                logger.info(f"清理封面图失败 - {video_name}: {str(e)}")
+            
+        # 获取mt
+        logger.info(f"获取上传token - {video_name}")
+        mt = get_mt(cookies)
+        if not mt:
+            raise Exception("获取上传token失败")
+
+        # 生成封面图
+        if thread_control.should_stop():
+            return False
+            
+        # 上传视频前先生成封面图
+        logger.info(f"正在生成视频封面 - {video_name}")
+        cover_path = create_cover_from_video(file_path)
+
+        if not cover_path or not os.path.exists(cover_path):
+            logger.info(f"无法生成视频封面，将使用默认封面 - {video_name}")
+            if os.path.exists(default_cover):
+                cover_path = default_cover
+            else:
+                logger.info("默认封面图不存在，跳过此视频")
+                return False
+
+        # 上传视频
+        if thread_control.should_stop():
+            return False
+            
+        logger.info(f"开始上传视频文件 - {video_name}")
+        file_id, videoFileName = upload_4m_video(mt, file_path)
+
+        # 上传封面
+        if thread_control.should_stop():
+            return False
+            
+        logger.info(f"开始上传封面图 - {video_name}")
+        try:
+            extProperty = upload_pic(cookies, cover_path)
+        except Exception as e:
+            logger.info(f"封面图上传失败 - {video_name}: {str(e)}")
+            extProperty = upload_pic(cookies, "default_cover.jpg")
+
+        appid = get_app_id(cookies)
+        logger.info(f"获取视频URL - {video_name}")
+        videoFile = get_video_url(file_id, mt)
+
+        # 发布内容
+        if thread_control.should_stop():
+            return False
+            
+        logger.info(f"发布视频内容 - {video_name}")
+        publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies)
+
+        # 根据配置决定是否删除原文件
+        if delete_original and not thread_control.should_stop():
+            # 清理文件
+            os.remove(file_path)
+            cover_path = os.path.splitext(file_path)[0] + '.jpg'
+            if os.path.exists(cover_path):
+                os.remove(cover_path)
+                logger.info(f"清理临时文件完成 - {video_name}")
+        else:
+            logger.info(f"保留原始视频文件 - {video_name}")
+
+        if appid:
+            update_uploads_and_files(appid)
+
+        logger.info(f"视频处理成功 - {video_name}")
+        return True
+
+    except Exception as e:
+        logger.error(f"视频处理失败 - {video_name}: {str(e)}")
+        return False
+    finally:
+        # 清理临时文件
+        try:
+            if os.path.exists(cover_path) and cover_path != "default_cover.jpg":
+                os.remove(cover_path)
+        except Exception as e:
+            logger.info(f"清理封面图失败 - {video_name}: {str(e)}")
 
 
 def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3, appid=None, index=None,
