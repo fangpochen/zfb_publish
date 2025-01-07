@@ -1056,7 +1056,7 @@ def main():
         app = QApplication(sys.argv)
     
     # 是否启用密钥验证（可以通过配置文件或其他方式控制）
-    ENABLE_KEY_VERIFICATION = False  # 设置为 False 可以禁用密钥验证
+    ENABLE_KEY_VERIFICATION = True  # 设置为 False 可以禁用密钥验证
     
     if ENABLE_KEY_VERIFICATION:
         if not show_key_verification():

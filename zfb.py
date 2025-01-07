@@ -1407,6 +1407,24 @@ def process_single_video(args):
                 logger.error(f"时间格式错误: {str(e)}")
                 raise Exception("时间格式错误，请使用 YYYY-MM-DD HH:MM 或 YYYY-MM-DD HH:MM:SS 格式")
 
+    try:
+        # 验证定时发布时间
+        if scheduleTime:
+            try:
+                # 支持两种格式：带秒的完整格式和不带秒的简化格式
+                try:
+                    schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M')
+                    
+                current_datetime = datetime.now()
+                if schedule_datetime <= current_datetime:
+                    logger.error(f"定时发布时间 {scheduleTime} 小于当前时间，跳过上传")
+                    raise Exception("定时发布时间不能小于当前时间")
+            except ValueError as e:
+                logger.error(f"时间格式错误: {str(e)}")
+                raise Exception("时间格式错误，请使用 YYYY-MM-DD HH:MM 或 YYYY-MM-DD HH:MM:SS 格式")
+
         # 设置默认封面图路径
         default_cover = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_cover.jpg")
         
@@ -1485,34 +1503,7 @@ def process_single_video(args):
 
     except Exception as e:
         logger.error(f"视频处理失败 - {video_name}: {str(e)}")
-        
-        # 如果是token获取失败，不移动文件
-        if "获取上传token失败" in str(e):
-            return False
-            
-        # 检查当前目录是否已经是failed目录
-        current_dir = os.path.basename(os.path.dirname(file_path))
-        if current_dir == "failed":
-            logger.info(f"文件已在failed目录中，无需移动: {file_path}")
-            return False
-            
-        # 其他错误则移动文件到failed目录
-        root_failed_dir = os.path.join(os.path.dirname(os.path.dirname(file_path)), "failed")
-        os.makedirs(root_failed_dir, exist_ok=True)
-        
-        original_dir_name = os.path.basename(os.path.dirname(file_path))
-        sub_failed_dir = os.path.join(root_failed_dir, original_dir_name)
-        os.makedirs(sub_failed_dir, exist_ok=True)
-        
-        failed_video_path = os.path.join(sub_failed_dir, video_name)
-        try:
-            shutil.move(file_path, failed_video_path)
-            logger.info(f"已将失败视频移动到: {failed_video_path}")
-        except Exception as move_error:
-            logger.error(f"移动失败文件时出错: {str(move_error)}")
-            
         return False
-        
     finally:
         # 清理临时文件（包括封面）
         try:
