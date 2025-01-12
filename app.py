@@ -1049,6 +1049,13 @@ def show_key_verification():
 def main():
     logger.info("=================== 程序启动 ===================")
     
+    # 检查时间限制
+    expiry_date = datetime(2025, 3, 31)  # 2025年3月底
+    if datetime.now() > expiry_date:
+        logger.error("程序已过期")
+        QMessageBox.critical(None, "错误", "程序已过期，请联系开发者")
+        sys.exit(1)
+    
     # 确保在创建任何窗口之前先创建 QApplication
     app = QApplication.instance()
     if app is None:

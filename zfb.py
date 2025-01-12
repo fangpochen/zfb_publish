@@ -19,6 +19,7 @@ import threading
 import logging
 from concurrent.futures import ThreadPoolExecutor
 import shutil
+from PIL import Image
 
 # 限制每分钟最多处理2个视频
 ONE_MINUTE = 60
@@ -1271,21 +1272,22 @@ def calculate_file_md5(file):
 def create_cover_from_video(video_path, output_path=None):
     try:
         video_path = video_path.replace('\\', '/')
+        
+        # 检查是否已存在同名jpg文件
+        default_jpg = os.path.splitext(video_path)[0] + '.jpg'
+        if os.path.exists(default_jpg):
+            logger.info(f"使用已存在的封面图: {default_jpg}")
+            return default_jpg
 
         if not os.path.exists(video_path):
             logger.info(f"视频文件不存在: {video_path}")
             return None
 
         if output_path is None:
-            output_dir = os.path.dirname(video_path)
-            base_name = os.path.splitext(os.path.basename(video_path))[0]
-            output_path = f"{output_dir}/{base_name}.jpg"
+            output_path = default_jpg
 
         output_path = output_path.replace('\\', '/')
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-        logger.info(f"视频路径: {video_path}")
-        logger.info(f"封面输出路径: {output_path}")
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -1293,13 +1295,10 @@ def create_cover_from_video(video_path, output_path=None):
             return None
 
         try:
-            # 获取视频的FPS
             fps = cap.get(cv2.CAP_PROP_FPS)
             if fps <= 0:
-                logger.info(f"无法获取视频FPS，使用默认值30")
                 fps = 30
                 
-            # 设置读取第一秒的最后一帧
             frame_position = int(fps)
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_position)
             
@@ -1308,14 +1307,9 @@ def create_cover_from_video(video_path, output_path=None):
                 logger.info(f"无法读取指定帧: {video_path}")
                 return None
 
-            # BGR 转 RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-            # 使用 PIL 处理图片
-            from PIL import Image
             img = Image.fromarray(frame_rgb)
             
-            # 获取原始尺寸
             original_width = img.width
             original_height = img.height
             
@@ -1323,52 +1317,37 @@ def create_cover_from_video(video_path, output_path=None):
             is_landscape = original_width > original_height
             
             if is_landscape:
-                # 横屏视频：保持原始宽高比
-                target_height = 1080  # 设置目标高度
-                target_width = int(target_height * (original_width / original_height))
+                # 横屏视频：1440x1080
+                target_width = 1440
+                target_height = 1080
                 resize_img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
             else:
-                # 竖屏视频：使用之前的 2030x2700 比例
+                # 竖屏视频：2030x2700
                 target_width = 2030
                 target_height = 2700
                 
-                # 计算原始宽高比
                 original_ratio = original_width / original_height
                 target_ratio = target_width / target_height
                 
                 if original_ratio > target_ratio:
-                    # 原图较宽，以高度为基准进行缩放
                     new_height = target_height
                     new_width = int(target_height * original_ratio)
                     resize_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                    # 从中心裁剪
                     left = (new_width - target_width) // 2
                     right = left + target_width
                     resize_img = resize_img.crop((left, 0, right, target_height))
                 else:
-                    # 原图较高，以宽度为基准进行缩放
                     new_width = target_width
                     new_height = int(target_width / original_ratio)
                     resize_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                    # 从中心裁剪
                     top = (new_height - target_height) // 2
                     bottom = top + target_height
                     resize_img = resize_img.crop((0, top, target_width, bottom))
-            
-            # 保存调整后的图片
-            try:
-                resize_img.save(output_path, "JPEG", quality=95)
-                logger.info(f"使用PIL保存图片成功: {output_path}")
 
-                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                    return output_path
-                else:
-                    logger.info(f"图片文件创建失败或大小为0: {output_path}")
-                    return None
+            resize_img.save(output_path, "JPEG", quality=95)
+            logger.info(f"成功生成封面图: {output_path}")
 
-            except Exception as e:
-                logger.info(f"PIL保存图片失败: {str(e)}")
-                return None
+            return output_path if os.path.exists(output_path) and os.path.getsize(output_path) > 0 else None
 
         finally:
             cap.release()
@@ -1388,24 +1367,6 @@ def process_single_video(args):
     cookies, file_path, scheduleTime, title, appid, index, delete_original = args
     video_name = os.path.basename(file_path)
     logger.info(f"开始处理视频: {video_name}")
-
-    try:
-        # 验证定时发布时间
-        if scheduleTime:
-            try:
-                # 支持两种格式：带秒的完整格式和不带秒的简化格式
-                try:
-                    schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M:%S')
-                except ValueError:
-                    schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M')
-                    
-                current_datetime = datetime.now()
-                if schedule_datetime <= current_datetime:
-                    logger.error(f"定时发布时间 {scheduleTime} 小于当前时间，跳过上传")
-                    raise Exception("定时发布时间不能小于当前时间")
-            except ValueError as e:
-                logger.error(f"时间格式错误: {str(e)}")
-                raise Exception("时间格式错误，请使用 YYYY-MM-DD HH:MM 或 YYYY-MM-DD HH:MM:SS 格式")
 
     try:
         # 验证定时发布时间
