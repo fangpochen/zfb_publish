@@ -267,6 +267,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.current_offset = len(open(self.log_file_path, "r", encoding="utf-8").readlines())
 
             self.setupUi(self)
+            
+            # 设置窗口图标
+            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.ico")
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+            
             self.lineEdit.setText("50")
             self.thread = Thread()
             self.thread.error_signal.connect(self.update_table_cookie)
@@ -328,6 +334,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.file_check_timer = QTimer(self)
             self.file_check_timer.timeout.connect(self.update_file_counts)
             self.file_check_timer.start(300000)  # 每5分钟检查一次
+
+            # 连接搜索框信号
+            self.search_input.textChanged.connect(self.filter_table)
 
         except Exception as e:
             logger.error(f"主窗口初始化失败: {str(e)}")
@@ -772,6 +781,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.tableWidget.setItem(i, 13, QTableWidgetItem(str(failed_count)))
             self.tableWidget.setItem(i, 14, QTableWidgetItem(str(last_publish_time)))
 
+        # 在填充完数据后，应用当前的搜索过滤
+        self.filter_table()
+
     def bind_folder(self, data: (str, int)):
         """
         绑定文件夹
@@ -1100,6 +1112,20 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             
         except Exception as e:
             logger.error(f"更新文件总数时出错: {str(e)}")
+
+    def filter_table(self):
+        """根据搜索框内容过滤表格"""
+        search_text = self.search_input.text().lower()
+        
+        for row in range(self.tableWidget.rowCount()):
+            show_row = False
+            # 在appId列(索引1)和账号名称列(索引2)中搜索
+            for col in [1, 2]:
+                item = self.tableWidget.item(row, col)
+                if item and search_text in item.text().lower():
+                    show_row = True
+                    break
+            self.tableWidget.setRowHidden(row, not show_row)
 
 
 def show_key_verification():

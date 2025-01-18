@@ -19,6 +19,30 @@ class Ui_MainWindow(object):
         self.centralwidget.setObjectName("centralwidget")
         self.verticalLayout_4 = QtWidgets.QVBoxLayout(self.centralwidget)
         self.verticalLayout_4.setObjectName("verticalLayout_4")
+        
+        # 添加搜索框布局
+        self.search_layout = QtWidgets.QHBoxLayout()
+        self.search_layout.setObjectName("search_layout")
+        
+        # 添加搜索标签
+        self.search_label = QtWidgets.QLabel(self.centralwidget)
+        self.search_label.setObjectName("search_label")
+        self.search_layout.addWidget(self.search_label)
+        
+        # 添加搜索输入框
+        self.search_input = QtWidgets.QLineEdit(self.centralwidget)
+        self.search_input.setObjectName("search_input")
+        self.search_input.setPlaceholderText("输入appId进行搜索...")
+        self.search_input.setMaximumWidth(200)
+        self.search_layout.addWidget(self.search_input)
+        
+        # 添加弹簧
+        spacerItem = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
+        self.search_layout.addItem(spacerItem)
+        
+        # 将搜索布局添加到主布局
+        self.verticalLayout_4.addLayout(self.search_layout)
+        
         self.tableWidget = QtWidgets.QTableWidget(self.centralwidget)
         self.tableWidget.setDragEnabled(True)
         self.tableWidget.setObjectName("tableWidget")
@@ -257,3 +281,4 @@ class Ui_MainWindow(object):
         self.lineEdit.setText(_translate("MainWindow", "3"))
         self.pushButton_2.setText(_translate("MainWindow", "开始上传"))
         self.pushButton_6.setText(_translate("MainWindow", "停止"))
+        self.search_label.setText(_translate("MainWindow", "搜索:"))
