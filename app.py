@@ -9,6 +9,7 @@ import zipfile
 from datetime import datetime
 from key_verification import verify_key
 import multiprocessing
+import logging
 
 warnings.filterwarnings("ignore")
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -19,6 +20,29 @@ from ui.ui import Ui_MainWindow
 from zfb import *
 import pandas as pd
 from db import update_existing_fields, delete_records_by_appids
+
+# 创建自定义的日志格式化器
+class ThreadIdFormatter(logging.Formatter):
+    def format(self, record):
+        record.threadid = f"Thread-{threading.current_thread().ident}"
+        return super().format(record)
+
+# 配置日志
+logger = logging.getLogger()
+formatter = ThreadIdFormatter('%(asctime)s - %(threadid)s - %(levelname)s - %(message)s')
+
+# 配置文件处理器
+file_handler = logging.FileHandler('log.log', encoding='utf-8')
+file_handler.setFormatter(formatter)
+
+# 配置控制台处理器
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+
+# 添加处理器到logger
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+logger.setLevel(logging.INFO)
 
 conn = sqlite3.connect('data.db')
 
@@ -60,7 +84,11 @@ class Thread(QThread):
                     elif self.model == 1:
                         self._wait_for_timing()
                         if not self._stop_event.is_set():
-                            self._run_task(self.upload_publish_video, i)
+                            result = self._run_task(self.upload_publish_video, i)
+                            if isinstance(result, dict) and result.get("success"):
+                                # 发送上传成功信号，触发界面刷新
+                                self.upload_signal.emit(result["index"])
+                            # 移除DataFrame的更新，界面会通过信号自动刷新数据
                     elif self.model == 2:
                         self._run_task(self.get_public_list, i)
                     elif self.model == 3:
@@ -213,10 +241,11 @@ class Thread(QThread):
         logger.info("cookies:" + str(self.df.iloc[i]["cookies_dict"]))
         logger.info("appid:" + str(self.df.iloc[i]["appid"]))
         try:
-            upload_publish_video(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["folder_path"],
-                                 self.df.iloc[i]["topic_settings"],
-                                 scheduleTime, max_workers=self.max_workers, appid=self.df.iloc[i]["appid"], index=i,
-                                 max_uploads=self.df.iloc[i]["total_uploads"], delete_original=self.delete_original)
+            stats = upload_publish_video(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["folder_path"],
+                                         self.df.iloc[i]["topic_settings"],
+                                         scheduleTime, max_workers=self.max_workers, appid=self.df.iloc[i]["appid"], index=i,
+                                         max_uploads=self.df.iloc[i]["total_uploads"], delete_original=self.delete_original)
+            self.handle_upload_complete(stats)
 
         except Exception as e:
             logger.info(f"upload_publish_video报错:{e}")
@@ -271,24 +300,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             if self.checkBox.isChecked():
                 self.timer_login.start(300000)
 
-            # self.tableWidget.paintEvent = self.paintEvent_tabel
-
-            # 设置窗口图标
-            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.ico")
-            if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
-
             # 添加删除原视频的复选框
             self.delete_video_checkbox = QCheckBox("上传后删除原视频")
             self.delete_video_checkbox.setChecked(True)  # 默认勾选
-            
-            # 将复选框添加到现有布局中
-            # 假设我们要添加到 horizontalLayout_2 中
             self.horizontalLayout_2.addWidget(self.delete_video_checkbox)
 
             # 添加这些设置来启用行选择
-            self.tableWidget.setSelectionBehavior(QAbstractItemView.SelectRows)  # 设置选择行为为选择整行
-            self.tableWidget.setSelectionMode(QAbstractItemView.SingleSelection)  # 设置选择模式为单行选择
+            self.tableWidget.setSelectionBehavior(QAbstractItemView.SelectRows)
+            self.tableWidget.setSelectionMode(QAbstractItemView.SingleSelection)
 
             # 添加日志检查定时器
             self.log_check_timer = QTimer(self)
@@ -299,6 +318,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.chrome_config_button = QPushButton("配置Chrome路径")
             self.chrome_config_button.clicked.connect(self.configure_chrome_path)
             self.horizontalLayout_2.addWidget(self.chrome_config_button)
+
+            # 添加每日重置定时器
+            self.reset_timer = QTimer(self)
+            self.reset_timer.timeout.connect(self.check_daily_reset)
+            self.reset_timer.start(300000)  # 每5分钟检查一次
+
+            # 添加文件数量检查定时器
+            self.file_check_timer = QTimer(self)
+            self.file_check_timer.timeout.connect(self.update_file_counts)
+            self.file_check_timer.start(300000)  # 每5分钟检查一次
 
         except Exception as e:
             logger.error(f"主窗口初始化失败: {str(e)}")
@@ -609,6 +638,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         """
         try:
+            # 更新成功计数
+            current_columns = self.tableWidget.columnCount()
+            success_count = int(self.tableWidget.item(i, current_columns - 3).text()) + 1
+            self.tableWidget.setItem(i, current_columns - 3, QTableWidgetItem(str(success_count)))
+            
+            # 更新最近发布时间
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            self.tableWidget.setItem(i, current_columns - 1, QTableWidgetItem(current_time))
+            self.df.at[i, "last_publish_time"] = current_time
+            
+            # 更新total_uploads
             count = int(self.tableWidget.item(i, 5).text()) + 1
             self.tableWidget.setItem(i, 5, QTableWidgetItem(str(count)))
             self.df.at[i, "total_uploads"] = count
@@ -617,7 +657,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.tableWidget.setItem(i, 6, QTableWidgetItem(str(self.df.iloc[i]["当前上传数"])))
             self.tableWidget.setItem(i, 9, QTableWidgetItem(str(self.df.iloc[i]["total_files"])))
         except Exception as e:
-            print(e)
+            logger.error(f"更新表格失败: {str(e)}")
 
     def update_table_cookie(self, i: int):
         """
@@ -647,7 +687,28 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def show_table(self, df: pd.DataFrame):
         self.tableWidget.setRowCount(0)
         self.tableWidget.setRowCount(df.shape[0])
-
+        
+        # 检查是否已经存在这些列
+        current_columns = self.tableWidget.columnCount()
+        required_columns = ["今日成功", "今日失败", "最近发布时间"]
+        existing_headers = [self.tableWidget.horizontalHeaderItem(i).text() if self.tableWidget.horizontalHeaderItem(i) else "" 
+                           for i in range(current_columns)]
+        
+        # 只有在这些列不存在时才添加
+        if not all(col in existing_headers for col in required_columns):
+            # 设置固定的列数
+            self.tableWidget.setColumnCount(13)  # 原有的12列
+            # 添加3个新列
+            self.tableWidget.setHorizontalHeaderItem(13, QTableWidgetItem("今日成功"))
+            self.tableWidget.setHorizontalHeaderItem(14, QTableWidgetItem("今日失败"))
+            self.tableWidget.setHorizontalHeaderItem(15, QTableWidgetItem("最近发布时间"))
+        
+        headers = [
+            "序号", "appId", "账号名称", "今日推荐数", "Cookies状态",
+            "上传总数", "话题设置", "删除不可推荐", "文件总数",
+            "是否是主账号", "文件夹路径", "操作", "今日成功", "今日失败", "最近发布时间"
+        ]
+        
         for i in range(df.shape[0]):
             # 第一列：复选框 + 序号
             checkbox = QCheckBox()
@@ -672,27 +733,24 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             # 第五列：total_uploads
             self.tableWidget.setItem(i, 5, QTableWidgetItem(str(self.df.iloc[i]["total_uploads"])))
 
-            # 第六列：当前上传数
-            self.tableWidget.setItem(i, 6, QTableWidgetItem(str(self.df.iloc[i]["current_uploads"])))
+            # 第六列：话题
+            self.tableWidget.setItem(i, 6, QTableWidgetItem(str(self.df.iloc[i]["topic_settings"])))
 
-            # 第七列：话题
-            self.tableWidget.setItem(i, 7, QTableWidgetItem(str(self.df.iloc[i]["topic_settings"])))
+            # 第七列：删除不可推荐
+            self.tableWidget.setItem(i, 7, QTableWidgetItem(str(self.df.iloc[i]["delete_unrecommended"])))
 
-            # 第八列：删除不可推荐
-            self.tableWidget.setItem(i, 8, QTableWidgetItem(str(self.df.iloc[i]["delete_unrecommended"])))
-
-            # 第九列：文件总数
-            self.tableWidget.setItem(i, 9, QTableWidgetItem(str(self.df.iloc[i]["total_files"])))
+            # 第八列：文件总数
+            self.tableWidget.setItem(i, 8, QTableWidgetItem(str(self.df.iloc[i]["total_files"])))
             if self.df.iloc[i]["folder_path"] is not None:
                 count = self.get_video_count(self.df.iloc[i]["folder_path"])
 
                 self.df.at[i, "total_files"] = count
-                self.tableWidget.setItem(i, 9, QTableWidgetItem(str(count)))
+                self.tableWidget.setItem(i, 8, QTableWidgetItem(str(count)))
 
-            self.tableWidget.setItem(i, 10, QTableWidgetItem("是" if self.df.iloc[i]["is_main_account"] else "否"))
-            # 第11列：绑定文件夹
-            self.tableWidget.setItem(i, 11, QTableWidgetItem(str(self.df.iloc[i]["folder_path"])))
-            # 第12列：按钮
+            self.tableWidget.setItem(i, 9, QTableWidgetItem("是" if self.df.iloc[i]["is_main_account"] else "否"))
+            # 第10列：绑定文件夹
+            self.tableWidget.setItem(i, 10, QTableWidgetItem(str(self.df.iloc[i]["folder_path"])))
+            # 第11列：按钮
             button = QPushButton("绑定文件夹")
             if self.df.iloc[i]["total_files"] > 0:
                 button.setStyleSheet("""
@@ -703,7 +761,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 background-color: rgb(227, 61, 48)
                 """)
             button.clicked.connect(lambda checked, data=(appid, i): self.bind_folder(data))
-            self.tableWidget.setCellWidget(i, 12, button)
+            self.tableWidget.setCellWidget(i, 11, button)
+
+            # 添加统计列（使用固定的列索引）
+            success_count = self.df.iloc[i].get("daily_success", 0)
+            failed_count = self.df.iloc[i].get("daily_failed", 0)
+            last_publish_time = self.df.iloc[i].get("last_publish_time", "")
+            
+            self.tableWidget.setItem(i, 12, QTableWidgetItem(str(success_count)))
+            self.tableWidget.setItem(i, 13, QTableWidgetItem(str(failed_count)))
+            self.tableWidget.setItem(i, 14, QTableWidgetItem(str(last_publish_time)))
 
     def bind_folder(self, data: (str, int)):
         """
@@ -729,7 +796,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         else:
             button.setStyleSheet("""
             background-color: rgb(227, 61, 48)""")
-        self.tableWidget.setItem(data[1], 11, QTableWidgetItem(str(folder_path)))
+        self.tableWidget.setItem(data[1], 10, QTableWidgetItem(str(folder_path)))
         try:
             self.df.at[data[1], "folder_path"] = folder_path
             self.df.at[data[1], "total_files"] = video_count
@@ -771,7 +838,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def update_video_count(self, row, count):
         try:
 
-            self.tableWidget.setItem(row, 9, QTableWidgetItem(str(count)))
+            self.tableWidget.setItem(row, 8, QTableWidgetItem(str(count)))
         except Exception as e:
             print(e)
 
@@ -906,7 +973,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.df.at[i, "check_"] = cell_widget.isChecked()
 
             # 更新topic_settings列
-            topic_item = self.tableWidget.item(i, 7)
+            topic_item = self.tableWidget.item(i, 6)
             self.df.at[i, "topic_settings"] = topic_item.text()
 
             # total_uploads列
@@ -940,6 +1007,99 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         except Exception as e:
             logger.error(f"配置Chrome路径失败: {str(e)}")
             QMessageBox.warning(self, "错误", f"配置失败: {str(e)}")
+
+    def handle_upload_complete(self, stats, row_index):
+        """处理单个账号的上传完成统计"""
+        success_count = stats.get("success", 0)
+        failed_count = stats.get("failed", 0)
+        
+        # 更新DataFrame中的统计数据
+        current_success = self.df.at[row_index, "daily_success"] = self.df.at[row_index, "daily_success"] + success_count
+        current_failed = self.df.at[row_index, "daily_failed"] = self.df.at[row_index, "daily_failed"] + failed_count
+        
+        # 更新表格显示
+        current_columns = self.tableWidget.columnCount()
+        self.tableWidget.setItem(row_index, current_columns - 2, QTableWidgetItem(str(current_success)))
+        self.tableWidget.setItem(row_index, current_columns - 1, QTableWidgetItem(str(current_failed)))
+
+    def check_daily_reset(self):
+        """检查是否需要重置每日统计"""
+        try:
+            current_date = datetime.now().date()
+            last_reset_file = '.last_reset_date'
+            
+            # 如果没有上次发布记录，直接返回
+            if not os.path.exists(last_reset_file):
+                return
+            
+            # 读取上次发布日期
+            with open(last_reset_file, 'r') as f:
+                last_date = datetime.strptime(f.read().strip(), '%Y-%m-%d').date()
+            
+            # 如果上次发布不是今天，重置统计
+            if last_date != current_date:
+                logger.info("重置每日统计数据")
+                
+                # 直接更新数据库
+                conn = sqlite3.connect('data.db')
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE user_data 
+                    SET daily_success = 0,
+                        daily_failed = 0
+                ''')
+                conn.commit()
+                conn.close()
+                
+                # 重新加载数据并更新界面
+                self.init_ui()
+                
+                logger.info("每日统计重置完成")
+            
+        except Exception as e:
+            logger.error(f"每日重置检查时出错: {str(e)}")
+
+    def update_file_counts(self):
+        """更新所有账号的文件总数"""
+        try:
+            logger.info("开始更新文件总数...")
+            conn = sqlite3.connect('data.db')
+            cursor = conn.cursor()
+            
+            for i in range(self.df.shape[0]):
+                folder_path = self.df.iloc[i]["folder_path"]
+                if folder_path and os.path.exists(folder_path):
+                    # 获取文件夹中的视频文件数量
+                    video_count = self.get_video_count(folder_path)
+                    appid = self.df.iloc[i]["appid"]
+                    
+                    # 更新数据库
+                    cursor.execute('''
+                        UPDATE user_data 
+                        SET total_files = ?
+                        WHERE appid = ?
+                    ''', (video_count, appid))
+                    
+                    # 更新界面
+                    self.tableWidget.setItem(i, 8, QTableWidgetItem(str(video_count)))  # 8是文件总数列的索引
+                    
+                    # 更新DataFrame
+                    self.df.at[i, "total_files"] = video_count
+                    
+                    # 更新按钮颜色
+                    button = self.tableWidget.cellWidget(i, 11)  # 11是操作列的索引
+                    if button:
+                        if video_count > 0:
+                            button.setStyleSheet("background-color: rgb(90, 212, 105)")
+                        else:
+                            button.setStyleSheet("background-color: rgb(227, 61, 48)")
+            
+            conn.commit()
+            conn.close()
+            logger.info("文件总数更新完成")
+            
+        except Exception as e:
+            logger.error(f"更新文件总数时出错: {str(e)}")
 
 
 def show_key_verification():
@@ -978,10 +1138,14 @@ def show_key_verification():
         central_widget = QWidget()
         verify_window.setCentralWidget(central_widget)
         
-        # 创建布局
-        layout = QVBoxLayout(central_widget)
-        layout.setSpacing(10)
-        layout.setContentsMargins(20, 20, 20, 20)
+        # 创建主布局前确保central_widget没有已存在的布局
+        if central_widget.layout():
+            # 如果已存在布局，先清除它
+            QWidget().setLayout(central_widget.layout())
+            
+        # 创建新布局
+        layout = QVBoxLayout()
+        central_widget.setLayout(layout)
         
         # 添加控件
         title_label = QLabel('请输入API密钥进行验证')

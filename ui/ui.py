@@ -22,7 +22,7 @@ class Ui_MainWindow(object):
         self.tableWidget = QtWidgets.QTableWidget(self.centralwidget)
         self.tableWidget.setDragEnabled(True)
         self.tableWidget.setObjectName("tableWidget")
-        self.tableWidget.setColumnCount(13)
+        self.tableWidget.setColumnCount(15)
         self.tableWidget.setRowCount(0)
         item = QtWidgets.QTableWidgetItem()
         self.tableWidget.setHorizontalHeaderItem(0, item)
@@ -50,6 +50,10 @@ class Ui_MainWindow(object):
         self.tableWidget.setHorizontalHeaderItem(11, item)
         item = QtWidgets.QTableWidgetItem()
         self.tableWidget.setHorizontalHeaderItem(12, item)
+        item = QtWidgets.QTableWidgetItem()
+        self.tableWidget.setHorizontalHeaderItem(13, item)
+        item = QtWidgets.QTableWidgetItem()
+        self.tableWidget.setHorizontalHeaderItem(14, item)
         self.verticalLayout_4.addWidget(self.tableWidget)
         self.textBrowser = QtWidgets.QTextBrowser(self.centralwidget)
         self.textBrowser.setObjectName("textBrowser")
@@ -219,32 +223,17 @@ class Ui_MainWindow(object):
         _translate = QtCore.QCoreApplication.translate
         MainWindow.setWindowTitle(
             _translate("MainWindow", "视频批量上传(本软件仅供本工作室使用，禁止外传 如若外传 追溯传播途径 IP永久封禁)"))
-        item = self.tableWidget.horizontalHeaderItem(0)
-        item.setText(_translate("MainWindow", "序号"))
-        item = self.tableWidget.horizontalHeaderItem(1)
-        item.setText(_translate("MainWindow", "appId"))
-        item = self.tableWidget.horizontalHeaderItem(2)
-        item.setText(_translate("MainWindow", "账号名称"))
-        item = self.tableWidget.horizontalHeaderItem(3)
-        item.setText(_translate("MainWindow", "今日推荐数"))
-        item = self.tableWidget.horizontalHeaderItem(4)
-        item.setText(_translate("MainWindow", "Cookie状态"))
-        item = self.tableWidget.horizontalHeaderItem(5)
-        item.setText(_translate("MainWindow", "上传总数"))
-        item = self.tableWidget.horizontalHeaderItem(6)
-        item.setText(_translate("MainWindow", "当前上传数"))
-        item = self.tableWidget.horizontalHeaderItem(7)
-        item.setText(_translate("MainWindow", "话题设置"))
-        item = self.tableWidget.horizontalHeaderItem(8)
-        item.setText(_translate("MainWindow", "删除不可推荐"))
-        item = self.tableWidget.horizontalHeaderItem(9)
-        item.setText(_translate("MainWindow", "文件总数"))
-        item = self.tableWidget.horizontalHeaderItem(10)
-        item.setText(_translate("MainWindow", "是否是主账号"))
-        item = self.tableWidget.horizontalHeaderItem(11)
-        item.setText(_translate("MainWindow", "文件夹路径"))
-        item = self.tableWidget.horizontalHeaderItem(12)
-        item.setText(_translate("MainWindow", "操作"))
+        headers = [
+            "序号", "appId", "账号名称", "今日推荐数", "Cookie状态",
+            "上传总数", "话题设置", "删除不可推荐", "文件总数",
+            "是否是主账号", "文件夹路径", "操作", "今日成功",
+            "今日失败", "最近发布时间"
+        ]
+        
+        for col, header in enumerate(headers):
+            item = QtWidgets.QTableWidgetItem()
+            self.tableWidget.setHorizontalHeaderItem(col, item)
+            item.setText(_translate("MainWindow", header))
         self.pushButton_11.setText(_translate("MainWindow", "全选"))
         self.pushButton_12.setText(_translate("MainWindow", "取消"))
         self.pushButton_3.setText(_translate("MainWindow", "领取任务"))

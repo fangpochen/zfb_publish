@@ -38,7 +38,8 @@ def verify_key(api_key):
             "hostname": hostname,
             "os": os_info,
             "cpu": cpu_info,
-            "mac": mac
+            "mac": mac,
+            "item": "upload"
         }
     }
 

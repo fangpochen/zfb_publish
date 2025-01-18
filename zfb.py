@@ -62,6 +62,32 @@ class ThreadControl:
 # 创建全局实例
 thread_control = ThreadControl()
 
+# 创建自定义的日志格式化器
+class ThreadIdFormatter(logging.Formatter):
+    def format(self, record):
+        record.threadid = f"Thread-{threading.current_thread().ident}"
+        return super().format(record)
+
+# 获取logger
+logger = logging.getLogger()
+
+# 如果还没有配置过formatter
+if not logger.handlers:
+    formatter = ThreadIdFormatter('%(asctime)s - %(threadid)s - %(levelname)s - %(message)s')
+    
+    # 配置文件处理器
+    file_handler = logging.FileHandler('log.log', encoding='utf-8')
+    file_handler.setFormatter(formatter)
+    
+    # 配置控制台处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    
+    # 添加处理器到logger
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    logger.setLevel(logging.INFO)
+
 def create_table():
     conn = sqlite3.connect('data.db')
     cursor = conn.cursor()
@@ -84,20 +110,29 @@ def create_table():
             is_main_account INTEGER DEFAULT 1,   
             user_name TEXT,                      
             request_all TEXT,
-            mian_account_appid CHAR(64)                 
-        )
+            mian_account_appid CHAR(64),
+            daily_success INTEGER DEFAULT 0,      -- 新增：今日成功数
+            daily_failed INTEGER DEFAULT 0,       -- 新增：今日失败数
+            last_publish_time TEXT               -- 新增：最近发布时间
+        );
     ''')
     
-    # 重置每日计数器
-    cursor.execute('''
-        UPDATE user_data 
-        SET daily_recommendations = 0,
-            current_uploads = 0,
-            delete_unrecommended = 0
-    ''')
+    # 检查并添加新列（如果不存在）
+    try:
+        cursor.execute('ALTER TABLE user_data ADD COLUMN daily_success INTEGER DEFAULT 0;')
+    except sqlite3.OperationalError:
+        pass
     
-    logger.info("表格检查完成（已存在或成功创建）")
-    logger.info("已重置每日计数器")
+    try:
+        cursor.execute('ALTER TABLE user_data ADD COLUMN daily_failed INTEGER DEFAULT 0;')
+    except sqlite3.OperationalError:
+        pass
+    
+    try:
+        cursor.execute('ALTER TABLE user_data ADD COLUMN last_publish_time TEXT;')
+    except sqlite3.OperationalError:
+        pass
+    
     conn.commit()
     conn.close()
 
@@ -1069,21 +1104,9 @@ def upload_pic(cookies, video_file_path):
         return json.loads(response.text).get('extProperty')
 
 
-def get_video_url(file_id, mt, max_retries=30, retry_interval=5):
+def get_video_url(file_id, mt, max_retries=18, retry_interval=10):  # 18次 * 10秒 = 3分钟
     """
-    获取视频URL,失败时5分钟内每5秒重试一次
-
-    Args:
-        file_id: 文件ID
-        mt: token
-        max_retries: 最大重试次数(60次=5分钟)
-        retry_interval: 重试间隔(秒)
-
-    Returns:
-        str: 视频URL
-
-    Raises:
-        Exception: 超过最大重试次数后仍失败
+    获取视频URL，3分钟内每10秒重试一次
     """
     headers = {
         'accept': 'application/json, text/plain, */*',
@@ -1113,18 +1136,16 @@ def get_video_url(file_id, mt, max_retries=30, retry_interval=5):
             if convert_results and convert_results[0].get('url'):
                 return convert_results[0].get('url')
 
-            logger.info(f"Attempt {attempt + 1}: Video URL not ready yet, retrying in {retry_interval} seconds...")
             time.sleep(retry_interval)
 
         except Exception as e:
-            logger.info('get_video_url{}',json.loads(response.text))
-            logger.info(f"Attempt {attempt + 1} failed: {str(e)}")
+            logger.error(f'获取视频URL失败: {str(e)}')
             if attempt < max_retries - 1:
                 time.sleep(retry_interval)
             else:
-                raise Exception(f"Failed to get video URL after {max_retries} attempts")
+                raise Exception(f"获取视频URL失败，已超过3分钟重试时间")
 
-    raise Exception(f"Failed to get video URL after {max_retries} attempts")
+    raise Exception(f"获取视频URL失败，已超过3分钟重试时间")
 
 def format_time_string(time_str):
     # 解析时间字符串
@@ -1322,27 +1343,10 @@ def create_cover_from_video(video_path, output_path=None):
                 target_height = 1080
                 resize_img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
             else:
-                # 竖屏视频：2030x2700
+                # 竖屏视频：直接调整为2030x2700
                 target_width = 2030
                 target_height = 2700
-                
-                original_ratio = original_width / original_height
-                target_ratio = target_width / target_height
-                
-                if original_ratio > target_ratio:
-                    new_height = target_height
-                    new_width = int(target_height * original_ratio)
-                    resize_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                    left = (new_width - target_width) // 2
-                    right = left + target_width
-                    resize_img = resize_img.crop((left, 0, right, target_height))
-                else:
-                    new_width = target_width
-                    new_height = int(target_width / original_ratio)
-                    resize_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                    top = (new_height - target_height) // 2
-                    bottom = top + target_height
-                    resize_img = resize_img.crop((0, top, target_width, bottom))
+                resize_img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
 
             resize_img.save(output_path, "JPEG", quality=95)
             logger.info(f"成功生成封面图: {output_path}")
@@ -1358,6 +1362,34 @@ def create_cover_from_video(video_path, output_path=None):
         logger.info(traceback.format_exc())
         return None
 
+def update_publish_stats(appid, success=True):
+    """更新发布统计到数据库"""
+    try:
+        conn = sqlite3.connect('data.db')
+        cursor = conn.cursor()
+        
+        if success:
+            # 更新成功计数和最近发布时间
+            cursor.execute('''
+                UPDATE user_data 
+                SET daily_success = daily_success + 1,
+                    last_publish_time = ?
+                WHERE appid = ?
+            ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), appid))
+        else:
+            # 更新失败计数
+            cursor.execute('''
+                UPDATE user_data 
+                SET daily_failed = daily_failed + 1
+                WHERE appid = ?
+            ''', (appid,))
+            
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"更新发布统计失败: {str(e)}")
+        return False
 
 def process_single_video(args):
     """处理单个视频的上传"""
@@ -1443,28 +1475,26 @@ def process_single_video(args):
             return False
             
         logger.info(f"发布视频内容 - {video_name}")
-        publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies)
-
-        # 根据配置决定是否删除原文件
-        if delete_original and not thread_control.should_stop():
-            # 清理文件
-            os.remove(file_path)
-            cover_path = os.path.splitext(file_path)[0] + '.jpg'
-            if os.path.exists(cover_path):
-                os.remove(cover_path)
-                logger.info(f"清理临时文件完成 - {video_name}")
-        else:
-            logger.info(f"保留原始视频文件 - {video_name}")
-
-        if appid:
-            update_uploads_and_files(appid)
-
-        logger.info(f"视频处理成功 - {video_name}")
-        return True
+        publish_result = publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies)
+        
+        if publish_result:
+            # 更新发布日期和成功统计
+            try:
+                with open('.last_reset_date', 'w') as f:
+                    f.write(datetime.now().date().strftime('%Y-%m-%d'))
+                update_publish_stats(appid, True)
+                return {"success": True, "index": index}
+            except Exception as e:
+                logger.error(f"更新发布统计失败: {str(e)}")
+        
+        # 更新失败统计
+        update_publish_stats(appid, False)
+        return {"success": False, "index": index}
 
     except Exception as e:
         logger.error(f"视频处理失败 - {video_name}: {str(e)}")
-        return False
+        update_publish_stats(appid, False)
+        return {"success": False, "index": index}
     finally:
         # 清理临时文件（包括封面）
         try:
@@ -1479,7 +1509,6 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
                          max_uploads=None, delete_original=True):
     try:
         cookies = get_sub_cookies(cookies, appid)
-        # 重置停止标志
         thread_control.clear()
         
         video_files = [os.path.join(dir_path, f) for f in os.listdir(dir_path) 
@@ -1490,42 +1519,48 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
             
         logger.info(f"找到{len(video_files)}个视频文件")
         
+        # 初始化计数器
+        success_count = 0
+        failed_count = 0
+        total_count = len(video_files)
+        
         thread_args = [(cookies, file_path, scheduleTime, title, appid, index, delete_original) 
                       for file_path in video_files]
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交任务并跟踪futures
             futures = {}
             for args in thread_args:
                 if thread_control.should_stop():
-                    logger.info("检测到停止信号，终止提交新任务")
                     break
-                    
                 future = executor.submit(process_single_video, args)
                 thread_control.add_future(future)
-                futures[future] = args[1]  # 存储文件路径
+                futures[future] = args[1]
 
-            # 等待任务完成
-            completed = 0
             for future in concurrent.futures.as_completed(futures):
                 if thread_control.should_stop():
-                    logger.info("检测到停止信号，正在终止剩余任务")
                     break
                     
                 file_path = futures[future]
                 try:
                     success = future.result()
-                    completed += 1
                     if success:
-                        logger.info(f"视频处理成功 ({completed}/{len(futures)}) - {os.path.basename(file_path)}")
+                        success_count += 1
+                        logger.info(f"视频处理成功 ({success_count}/{total_count}) - {os.path.basename(file_path)}")
                     else:
-                        logger.info(f"视频处理失败 ({completed}/{len(futures)}) - {os.path.basename(file_path)}")
-                except concurrent.futures.CancelledError:
-                    logger.info(f"任务被取消 - {os.path.basename(file_path)}")
+                        failed_count += 1
+                        logger.info(f"视频处理失败 ({failed_count}/{total_count}) - {os.path.basename(file_path)}")
                 except Exception as e:
+                    failed_count += 1
                     logger.error(f"视频处理异常 - {os.path.basename(file_path)}: {str(e)}")
                 finally:
                     thread_control.remove_future(future)
+                    
+        # 返回统计结果
+        return {
+            "total": total_count,
+            "success": success_count,
+            "failed": failed_count
+        }
 
     except Exception as e:
         logger.error(f"上传任务发生错误: {str(e)}")
