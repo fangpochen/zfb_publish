@@ -245,10 +245,13 @@ class Thread(QThread):
                                          self.df.iloc[i]["topic_settings"],
                                          scheduleTime, max_workers=self.max_workers, appid=self.df.iloc[i]["appid"], index=i,
                                          max_uploads=self.df.iloc[i]["total_uploads"], delete_original=self.delete_original)
-            self.handle_upload_complete(stats)
+            
+            # 直接返回结果，不再调用handle_upload_complete
+            return stats
 
         except Exception as e:
-            logger.info(f"upload_publish_video报错:{e}")
+            logger.error(f"upload_publish_video报错:{e}")
+            return {"success": False, "index": i}
 
 
 class MainWindow(QMainWindow, Ui_MainWindow):

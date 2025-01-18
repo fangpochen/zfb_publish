@@ -403,7 +403,7 @@ def get_operator(cookies, appid):
         'accept-language': 'zh-CN,zh;q=0.9,en-GB;q=0.8,en;q=0.7,en-US;q=0.6',
         'cache-control': 'no-cache',
         'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
-        # 'cookie': 'JSESSIONID=RZ434gxpCU1IajMt5Qu1XrVBMz2yf1authRZ42GZ00; mobileSendTime=-1; credibleMobileSendTime=-1; ctuMobileSendTime=-1; riskMobileBankSendTime=-1; riskMobileAccoutSendTime=-1; riskMobileCreditSendTime=-1; riskCredibleMobileSendTime=-1; riskOriginalAccountMobileSendTime=-1; cna=iEUyH7Q98FICAYvisk82DHns; receive-cookie-deprecation=1; auth_goto_http_type=https; alipay="K1iSL19mwb+fHm8DIo6SzyPb35M2atCZSixKUi1DCw=="; iw.userid="K1iSL19mwb+fHm8DIo6Szw=="; ctoken=WWc3uZPtU0BvsU9-; _CHIPS-ctoken=WWc3uZPtU0BvsU9-; LoginForm=alipay_login_auth; CLUB_ALIPAY_COM=2088642500352911; ali_apache_tracktmp="uid=2088642500352911"; auth_jwt=e30.eyJleHAiOjE3MzQxNDg1NzYyNzUsInJsIjoiNSwwLDI3LDE5LDI4LDMwLDEzLDEwIiwic2N0IjoiVE1kbzZESTRvMXMwWXJwNTFUaXZmaGpGZzJHd2ZMRnozMTFhNTh5IiwidWlkIjoiMjA4ODY0MjUwMDM1MjkxMSJ9.sRy8tthGuP-nPEtSFh2_yCEOqjvbShv5NrfOD-YSYtg; session.cookieNameId=ALIPAYJSESSIONID; _CHIPS-session.cookieNameId=ALIPAYJSESSIONID; _CHIPS-ALIPAYJSESSIONID=RZ434gxpCU1IajMt5Qu1XrVBMz2yf1authRZ42GZ00; ALIPAYJSESSIONID=RZ434gxpCU1IajMt5Qu1XrVBMz2yf1authRZ42GZ00; rtk=rf4qNdpgojWjJx+aufCe/yYEKC+y+7OzGJrkal6Ule/3+7SvlGp; __TRACERT_COOKIE_bucUserId=2088642500352911; zone=GZ00G; ALI_PAMIR_SID="U91ezshIDh/BOFs7HksnaCnzTkx#t0shNb2lQ8ewzYGmmWN3pzkx"; JSESSIONID=401C17CE67E7A60EE9B1B89FDE366446; spanner=4j9Wn2hAD+tEXtClWMqo376I7aVpoidu4EJoL7C0n0A=',
+        # 'cookie': 'JSESSIONID=RZ434gxpCU1IajMt5Qu1XrVBMz2yf1authRZ42GZ00; mobileSendTime=-1; credibleMobileSendTime=-1; ctuMobileSendTime=-1; riskMobileBankSendTime=-1; riskMobileAccoutSendTime=-1; riskMobileCreditSendTime=-1; riskCredibleMobileSendTime=-1; riskOriginalAccountMobileSendTime=-1; cna=iEUyH7Q98FICAYvisk82DHns; receive-cookie-deprecation=1; auth_goto_http_type=https; alipay="K1iSL19mwb+fHm8DIo6SzyPb35M2atCZSixKUi1DCw=="; iw.userid="K1iSL19mwb+fHm8DIo6Szw=="; ctoken=WWc3uZPtU0BvsU9-; _CHIPS-ctoken=WWc3uZPtU0BvsU9-; LoginForm=alipay_login_auth; CLUB_ALIPAY_COM=2088642500352911; ali_apache_tracktmp="uid=2088642500352911"; auth_jwt=e30.eyJleHAiOjE3MzQxNDg1NzYyNzUsInJsIjoiNSwwLDI3LDE5LDI4LDMwLDEzLDEwIiwic2N0IjoiVE1kbzZESTRvMXMwWXJwNTFUaXZmaGpGZzJHd2ZMTDhuVUlyQUwwY2RlYjQ5IiwidWlkIjoiMjA4ODY0MjUwMDM1MjkxMSJ9.sRy8tthGuP-nPEtSFh2_yCEOqjvbShv5NrfOD-YSYtg; session.cookieNameId=ALIPAYJSESSIONID; _CHIPS-session.cookieNameId=ALIPAYJSESSIONID; _CHIPS-ALIPAYJSESSIONID=RZ434gxpCU1IajMt5Qu1XrVBMz2yf1authRZ42GZ00; ALIPAYJSESSIONID=RZ434gxpCU1IajMt5Qu1XrVBMz2yf1authRZ42GZ00; rtk=rf4qNdpgojWjJx+aufCe/yYEKC+y+7OzGJrkal6Ule/3+7SvlGp; __TRACERT_COOKIE_bucUserId=2088642500352911; zone=GZ00G; ALI_PAMIR_SID="U91ezshIDh/BOFs7HksnaCnzTkx#t0shNb2lQ8ewzYGmmWN3pzkx"; JSESSIONID=401C17CE67E7A60EE9B1B89FDE366446; spanner=4j9Wn2hAD+tEXtClWMqo376I7aVpoidu4EJoL7C0n0A=',
         'origin': 'https://c.alipay.com',
         'pragma': 'no-cache',
         'priority': 'u=1, i',
@@ -1310,27 +1310,33 @@ def create_cover_from_video(video_path, output_path=None):
         output_path = output_path.replace('\\', '/')
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
+        # 打开视频文件
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             logger.info(f"无法打开视频文件: {video_path}")
             return None
 
         try:
+            # 获取视频的第一秒的帧
             fps = cap.get(cv2.CAP_PROP_FPS)
             if fps <= 0:
                 fps = 30
-                
-            frame_position = int(fps)
+            
+            # 设置到第一秒的位置
+            frame_position = int(fps)  # 取第一秒的帧
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_position)
             
+            # 读取帧
             ret, frame = cap.read()
             if not ret or frame is None:
                 logger.info(f"无法读取指定帧: {video_path}")
                 return None
 
+            # 转换颜色空间
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(frame_rgb)
             
+            # 获取原始尺寸
             original_width = img.width
             original_height = img.height
             
@@ -1341,25 +1347,45 @@ def create_cover_from_video(video_path, output_path=None):
                 # 横屏视频：1440x1080
                 target_width = 1440
                 target_height = 1080
-                resize_img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                # 计算缩放比例
+                scale = max(target_width/original_width, target_height/original_height)
             else:
-                # 竖屏视频：直接调整为2030x2700
+                # 竖屏视频：2030x2700
                 target_width = 2030
                 target_height = 2700
-                resize_img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
-
-            resize_img.save(output_path, "JPEG", quality=95)
+                # 计算缩放比例
+                scale = max(target_width/original_width, target_height/original_height)
+            
+            # 等比例缩放
+            new_width = int(original_width * scale)
+            new_height = int(original_height * scale)
+            resize_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # 居中裁剪
+            left = (new_width - target_width) // 2
+            top = (new_height - target_height) // 2
+            right = left + target_width
+            bottom = top + target_height
+            
+            # 裁剪到目标尺寸
+            final_img = resize_img.crop((left, top, right, bottom))
+            
+            # 保存图片
+            final_img.save(output_path, "JPEG", quality=95)
             logger.info(f"成功生成封面图: {output_path}")
 
-            return output_path if os.path.exists(output_path) and os.path.getsize(output_path) > 0 else None
+            # 验证文件是否成功生成
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                return output_path
+            return None
 
         finally:
             cap.release()
 
     except Exception as e:
-        logger.info(f"创建封面图过程发生异常: {str(e)}")
+        logger.error(f"创建封面图过程发生异常: {str(e)}")
         import traceback
-        logger.info(traceback.format_exc())
+        logger.error(traceback.format_exc())
         return None
 
 def update_publish_stats(appid, success=True):
