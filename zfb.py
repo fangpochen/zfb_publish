@@ -21,9 +21,6 @@ from concurrent.futures import ThreadPoolExecutor
 import shutil
 from PIL import Image
 
-# 限制每分钟最多处理2个视频
-ONE_MINUTE = 60
-MAX_REQUESTS_PER_MINUTE = 2
 
 # 在文件开头添加线程控制类
 class ThreadControl:
@@ -1104,9 +1101,9 @@ def upload_pic(cookies, video_file_path):
         return json.loads(response.text).get('extProperty')
 
 
-def get_video_url(file_id, mt, max_retries=18, retry_interval=10):  # 18次 * 10秒 = 3分钟
+def get_video_url(file_id, mt, max_retries=60, retry_interval=10):  # 60次 * 10秒 = 10分钟
     """
-    获取视频URL，3分钟内每10秒重试一次
+    获取视频URL，10分钟内每10秒重试一次
     """
     headers = {
         'accept': 'application/json, text/plain, */*',
@@ -1143,9 +1140,9 @@ def get_video_url(file_id, mt, max_retries=18, retry_interval=10):  # 18次 * 10
             if attempt < max_retries - 1:
                 time.sleep(retry_interval)
             else:
-                raise Exception(f"获取视频URL失败，已超过3分钟重试时间")
+                raise Exception(f"获取视频URL失败，已超过10分钟重试时间")
 
-    raise Exception(f"获取视频URL失败，已超过3分钟重试时间")
+    raise Exception(f"获取视频URL失败，已超过10分钟重试时间")
 
 def format_time_string(time_str):
     # 解析时间字符串
@@ -1509,6 +1506,15 @@ def process_single_video(args):
                 with open('.last_reset_date', 'w') as f:
                     f.write(datetime.now().date().strftime('%Y-%m-%d'))
                 update_publish_stats(appid, True)
+                
+                # 如果上传成功且需要删除原视频
+                if delete_original and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                        logger.info(f"已删除原视频: {file_path}")
+                    except Exception as e:
+                        logger.error(f"删除原视频失败: {str(e)}")
+                
                 return {"success": True, "index": index}
             except Exception as e:
                 logger.error(f"更新发布统计失败: {str(e)}")

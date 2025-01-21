@@ -53,7 +53,7 @@ class Thread(QThread):
     max_workers = 50
     error_signal = pyqtSignal(object)  # 返回异常，并设置cookies失效
     finish_signal = pyqtSignal(object)
-    upload_signal = pyqtSignal(int)  # 但账号上传完成, ���传数量 +1, 参数为所在行序号-1
+    upload_signal = pyqtSignal(int)  # 但账号上传完成, 传数量 +1, 参数为所在行序号-1
     recommend_signal = pyqtSignal(tuple)  # 更新界面推荐视频数量(账号序号, 推荐数量)
     delete_note_signal = pyqtSignal(tuple)  # 但删除不推荐视频(账号序号, 数量),+n
     running = False
@@ -165,8 +165,6 @@ class Thread(QThread):
         self._cleanup()
         logger.info("停止信号已发送")
 
-    def get_running(self):
-        return not self._stop_event.is_set()
 
     def get_lifeOptionList(self, i):
         """
@@ -229,24 +227,47 @@ class Thread(QThread):
         """
         调用上传视频
         Args:
-            i:
+            i: 行索引
 
         Returns:
-
+            上传结果统计
         """
-        scheduleTime = self.web_timing
-        logger.info(f"文件夹路径:{self.df.iloc[i]['folder_path']}")
-        logger.info(f'话题:{self.df.iloc[i]["topic_settings"]}')
-        logger.info(f'线程数:{self.max_workers}')
-        logger.info("cookies:" + str(self.df.iloc[i]["cookies_dict"]))
-        logger.info("appid:" + str(self.df.iloc[i]["appid"]))
         try:
-            stats = upload_publish_video(self.df.iloc[i]["cookies_dict"], self.df.iloc[i]["folder_path"],
-                                         self.df.iloc[i]["topic_settings"],
-                                         scheduleTime, max_workers=self.max_workers, appid=self.df.iloc[i]["appid"], index=i,
-                                         max_uploads=self.df.iloc[i]["total_uploads"], delete_original=self.delete_original)
+            # 根据选择的定时方式设置 scheduleTime
+            if self.timing:  # 如果是软件定时
+                # 获取今天的日期
+                today = datetime.now().date()
+                # 将时间字符串转换为时间对象
+                time_parts = self.timing.split(':')
+                schedule_time = datetime.combine(
+                    today, 
+                    time(int(time_parts[0]), int(time_parts[1]), int(time_parts[2]))
+                )
+                scheduleTime = schedule_time.strftime('%Y-%m-%d %H:%M:%S')
+            elif self.web_timing:  # 如果是Web定时
+                scheduleTime = self.web_timing
+            else:
+                scheduleTime = None  # 不定时
             
-            # 直接返回结果，不再调用handle_upload_complete
+            logger.info(f"定时发布时间设置为: {scheduleTime}")
+            logger.info(f"文件夹路径:{self.df.iloc[i]['folder_path']}")
+            logger.info(f'话题:{self.df.iloc[i]["topic_settings"]}')
+            logger.info(f'线程数:{self.max_workers}')
+            logger.info("cookies:" + str(self.df.iloc[i]["cookies_dict"]))
+            logger.info("appid:" + str(self.df.iloc[i]["appid"]))
+            
+            stats = upload_publish_video(
+                self.df.iloc[i]["cookies_dict"], 
+                self.df.iloc[i]["folder_path"],
+                self.df.iloc[i]["topic_settings"],
+                scheduleTime,  # 传递处理后的定时发布时间
+                max_workers=self.max_workers, 
+                appid=self.df.iloc[i]["appid"], 
+                index=i,
+                max_uploads=self.df.iloc[i]["total_uploads"], 
+                delete_original=self.delete_original
+            )
+            
             return stats
 
         except Exception as e:
@@ -957,7 +978,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def delete_non_recommended_videos(self):
         """
-        删除平台��推荐视频
+        删除平台不推荐视频
         Returns:
 
         """
