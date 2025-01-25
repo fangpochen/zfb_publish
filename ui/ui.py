@@ -11,16 +11,19 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
+        # 设置主窗口基本属性
         MainWindow.setObjectName("MainWindow")
         MainWindow.resize(1670, 1012)
         self.centralwidget = QtWidgets.QWidget(MainWindow)
+        
+        # 设置全局样式表，统一控件样式
         self.centralwidget.setStyleSheet(
             "QPushButton{height:41px;}QLineEdit{height:41px;}QComboBox{height:41px;}QLabel{font-size:11pt;}QRadioButton{font-size:11pt;}QDateTimeEdit{font-size:11pt;height:41px;}QTimeEdit{font-size:11pt;height:41px;}QCheckBox{font-size:11pt;height:41px;}")
-        self.centralwidget.setObjectName("centralwidget")
-        self.verticalLayout_4 = QtWidgets.QVBoxLayout(self.centralwidget)
-        self.verticalLayout_4.setObjectName("verticalLayout_4")
         
-        # 添加搜索框布局
+        # 创建主布局(垂直布局)
+        self.verticalLayout_4 = QtWidgets.QVBoxLayout(self.centralwidget)
+        
+        # === 搜索框部分 ===
         self.search_layout = QtWidgets.QHBoxLayout()
         self.search_layout.setObjectName("search_layout")
         
@@ -248,7 +251,9 @@ class Ui_MainWindow(object):
         QtCore.QMetaObject.connectSlotsByName(MainWindow)
 
     def retranslateUi(self, MainWindow):
+        """设置界面上所有控件的文本"""
         _translate = QtCore.QCoreApplication.translate
+        # 设置窗口标题
         MainWindow.setWindowTitle(
             _translate("MainWindow", "视频批量上传(本软件仅供本工作室使用，禁止外传 如若外传 追溯传播途径 IP永久封禁)"))
         headers = [

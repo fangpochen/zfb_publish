@@ -991,22 +991,11 @@ def upload_large_video(mt, file_path, file_size):
 
         response = requests.post('https://mass.alipay.com/file/multipart/upload/claim', headers=headers)
         file_id = json.loads(response.text).get('data').get('fileId')
-    with open(file_path, 'rb') as file:
-        # 设置分割后的最大文件大小
-        max_size = 4 * 1024 * 1024  # 4MB
 
-        # 计算文件的分块数
-        num_parts = (file_size // max_size) + (1 if file_size % max_size else 0)
-
-        # 开始分块上传
-        for i in range(num_parts):
-            # 读取每个分块的数据
-            part_data = file.read(max_size)
-            if not part_data:
-                break  # 如果没有数据，退出
-
-            # 构建每个分块上传的请求头
-            part_filename = f"{file_path}_part_{i + 1}"
+    def upload_part(args):
+        """上传单个分块的函数"""
+        try:
+            part_num, part_data, start_pos = args
             headers = {
                 'accept': 'application/json, text/plain, */*',
                 'accept-language': 'zh-CN,zh;q=0.9',
@@ -1023,21 +1012,55 @@ def upload_large_video(mt, file_path, file_size):
                 'x-mass-biztype': 'content_lifetab',
                 'x-mass-file-multipart-id': file_id,
                 'x-mass-file-multipart-length': str(len(part_data)),
-                'x-mass-file-multipart-num': str(i + 1),
-                'x-mass-file-multipart-start': str(i * 4194304),
+                'x-mass-file-multipart-num': str(part_num),
+                'x-mass-file-multipart-start': str(start_pos),
                 'x-mass-token': mt,
                 'x-mass-traceid': get_traid()
             }
 
-            # 上传分块数据
             files = {
                 'file': ('blob', part_data, 'application/octet-stream'),
             }
 
             response = requests.post('https://mass.alipay.com/file/multipart/upload/part', headers=headers, files=files)
-            logger.info(str(len(part_data)))
-            logger.info(response.json())  # 打印响应信息，检查上传是否成功
+            logger.info(f"分块 {part_num} 上传完成，大小: {len(part_data)}")
+            logger.info(f"分块 {part_num} 响应: {response.json()}")
+            return response.json()
+        except Exception as e:
+            logger.error(f"分块 {part_num} 上传失败: {str(e)}")
+            raise
 
+    with open(file_path, 'rb') as file:
+        # 设置分割后的最大文件大小
+        max_size = 4 * 1024 * 1024  # 4MB
+        # 计算文件的分块数
+        num_parts = (file_size // max_size) + (1 if file_size % max_size else 0)
+        
+        # 准备所有分块的数据
+        upload_args = []
+        for i in range(num_parts):
+            part_data = file.read(max_size)
+            if not part_data:
+                break
+            upload_args.append((i + 1, part_data, i * max_size))
+
+        # 使用线程池并行上传分块
+        max_workers = min(10, num_parts)  # 最多10个线程
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+            for args in upload_args:
+                future = executor.submit(upload_part, args)
+                futures.append(future)
+
+            # 等待所有分块上传完成
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()  # 检查是否有异常
+                except Exception as e:
+                    logger.error(f"分块上传失败: {str(e)}")
+                    raise  # 重新抛出异常
+
+    # 完成上传
     upload_complete(mt, file_id)
     return file_id, file.name
 
@@ -1540,6 +1563,9 @@ def process_single_video(args):
 def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3, appid=None, index=None,
                          max_uploads=None, delete_original=True):
     try:
+        # 记录开始时间
+        start_time = time.time()
+        
         cookies = get_sub_cookies(cookies, appid)
         thread_control.clear()
         
@@ -1586,12 +1612,32 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
                     logger.error(f"视频处理异常 - {os.path.basename(file_path)}: {str(e)}")
                 finally:
                     thread_control.remove_future(future)
+        
+        # 计算总耗时
+        end_time = time.time()
+        total_time = end_time - start_time
+        hours = int(total_time // 3600)
+        minutes = int((total_time % 3600) // 60)
+        seconds = int(total_time % 60)
+        
+        # 记录完成统计
+        logger.info(f"任务完成统计:")
+        logger.info(f"总视频数: {total_count}")
+        logger.info(f"成功数量: {success_count}")
+        logger.info(f"失败数量: {failed_count}")
+        logger.info(f"总耗时: {hours}小时{minutes}分钟{seconds}秒")
                     
         # 返回统计结果
         return {
             "total": total_count,
             "success": success_count,
-            "failed": failed_count
+            "failed": failed_count,
+            "time_spent": {
+                "hours": hours,
+                "minutes": minutes,
+                "seconds": seconds,
+                "total_seconds": total_time
+            }
         }
 
     except Exception as e:

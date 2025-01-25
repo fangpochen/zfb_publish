@@ -10,6 +10,7 @@ from datetime import datetime
 from key_verification import verify_key
 import multiprocessing
 import logging
+import json
 
 warnings.filterwarnings("ignore")
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -29,7 +30,13 @@ class ThreadIdFormatter(logging.Formatter):
 
 # 配置日志
 logger = logging.getLogger()
-formatter = ThreadIdFormatter('%(asctime)s - %(threadid)s - %(levelname)s - %(message)s')
+
+# 如果logger已经有处理器，先清除所有处理器
+if logger.handlers:
+    logger.handlers.clear()
+
+# 配置格式化器
+formatter = ThreadIdFormatter('%(asctime)s - %(levelname)s - %(message)s')
 
 # 配置文件处理器
 file_handler = logging.FileHandler('log.log', encoding='utf-8')
@@ -68,9 +75,43 @@ class Thread(QThread):
         self.active_tasks = []
         self.task_lock = threading.Lock()
 
+    def _run_task(self, task_func, *args):
+        """安全地运行任务并跟踪它"""
+        if self._stop_event.is_set():
+            return
+            
+        future = self.thread_pool.submit(task_func, *args)
+        with self.task_lock:
+            self.active_tasks.append(future)
+            
+        try:
+            result = future.result()  # 等待任务完成
+            return result  # 返回任务结果
+        except Exception as e:
+            logger.error(f"任务执行失败: {str(e)}")
+            raise  # 重新抛出异常，让上层处理
+        finally:
+            with self.task_lock:
+                if future in self.active_tasks:
+                    self.active_tasks.remove(future)
+
     def run(self):
         self.running = True
         self._stop_event.clear()
+        start_time = time.time()
+        
+        # 初始化统计信息
+        total_stats = {
+            "total": 0,
+            "success": 0,
+            "failed": 0,
+            "time_spent": {
+                "hours": 0,
+                "minutes": 0,
+                "seconds": 0,
+                "total_seconds": 0
+            }
+        }
         
         try:
             for i in range(self.df.shape[0]):
@@ -85,42 +126,49 @@ class Thread(QThread):
                         self._wait_for_timing()
                         if not self._stop_event.is_set():
                             result = self._run_task(self.upload_publish_video, i)
-                            if isinstance(result, dict) and result.get("success"):
-                                # 发送上传成功信号，触发界面刷新
-                                self.upload_signal.emit(result["index"])
-                            # 移除DataFrame的更新，界面会通过信号自动刷新数据
+                            if isinstance(result, dict):
+                                # 累加统计信息
+                                total_stats["total"] += result.get("total", 0)
+                                total_stats["success"] += result.get("success", 0)
+                                total_stats["failed"] += result.get("failed", 0)
+                                
+                                # 只有在真正成功上传时才发送更新信号
+                                if result.get("success") and result.get("success_count", 0) > 0:
+                                    self.upload_signal.emit(i)
+                                    
                     elif self.model == 2:
-                        self._run_task(self.get_public_list, i)
+                        result = self._run_task(self.get_public_list, i)
+                        if isinstance(result, tuple):
+                            self.recommend_signal.emit(result)
                     elif self.model == 3:
-                        self._run_task(self.delete_note, i)
+                        result = self._run_task(self.delete_note, i)
+                        if isinstance(result, tuple):
+                            self.delete_note_signal.emit(result)
                     elif self.model == 4:
                         self._run_task(self.get_lifeOptionList, i)
                 except Exception as e:
                     logger.error(f"任务执行错误: {str(e)}")
                     self.error_signal.emit(i)
+            
+            # 在所有任务完成后计算总耗时
+            if self.model == 1:
+                end_time = time.time()
+                total_time = end_time - start_time
+                total_stats["time_spent"] = {
+                    "hours": int(total_time // 3600),
+                    "minutes": int((total_time % 3600) // 60),
+                    "seconds": int(total_time % 60),
+                    "total_seconds": total_time
+                }
+                # 发送完整的统计信息
+                self.finish_signal.emit(total_stats)
+            else:
+                # 对于非上传任务，发送一个简单的完成信号
+                self.finish_signal.emit(True)
                     
         finally:
             self._cleanup()
-            self.finish_signal.emit(None)
             self.running = False
-
-    def _run_task(self, task_func, *args):
-        """安全地运行任务并跟踪它"""
-        if self._stop_event.is_set():
-            return
-            
-        future = self.thread_pool.submit(task_func, *args)
-        with self.task_lock:
-            self.active_tasks.append(future)
-            
-        try:
-            future.result()  # 等待任务完成
-        except Exception as e:
-            logger.error(f"任务执行失败: {str(e)}")
-        finally:
-            with self.task_lock:
-                if future in self.active_tasks:
-                    self.active_tasks.remove(future)
 
     def _wait_for_timing(self):
         """等待定时任务的辅助方法"""
@@ -170,14 +218,18 @@ class Thread(QThread):
         """
         调用接口获取子账号
         Args:
-            i:
-
+            i: 行索引
         Returns:
-
+            bool: 是否成功获取子账号
         """
-        appid = self.df.iloc[i]["appid"]
-        cookies = self.df.iloc[i]["cookies_dict"]
-        get_lifeOptionList(cookies, appid)
+        try:
+            appid = self.df.iloc[i]["appid"]
+            cookies = self.df.iloc[i]["cookies_dict"]
+            get_lifeOptionList(cookies, appid)
+            return True  # 返回成功标志
+        except Exception as e:
+            logger.error(f"获取子账号失败: {str(e)}")
+            return False
 
     def delete_note(self, i):
         """
@@ -268,11 +320,13 @@ class Thread(QThread):
                 delete_original=self.delete_original
             )
             
+            if isinstance(stats, dict):
+                stats["success_count"] = stats.get("success", 0)
             return stats
-
+            
         except Exception as e:
             logger.error(f"upload_publish_video报错:{e}")
-            return {"success": False, "index": i}
+            return {"success": False, "index": i, "success_count": 0}
 
 
 class MainWindow(QMainWindow, Ui_MainWindow):
@@ -343,6 +397,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.log_check_timer = QTimer(self)
             self.log_check_timer.timeout.connect(self.check_and_rotate_log)
             self.log_check_timer.start(300000)  # 每5分钟检查一次
+            
+            # 添加验证定时器（每30分钟验证一次）
+            self.verify_timer = QTimer(self)
+            self.verify_timer.timeout.connect(self.verify_key_periodically)
+            self.verify_timer.start(1800000)  # 30分钟 = 1800000毫秒
             
             # 在 horizontalLayout_2 中添加 Chrome 配置按钮
             self.chrome_config_button = QPushButton("配置Chrome路径")
@@ -608,6 +667,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             print(e)
 
     def set_tags(self):
+        """
+        设置话题
+        """
         try:
             data = self.get_check_row()
             tag = self.lineEdit_2.text()
@@ -616,26 +678,59 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             update_existing_fields(df)
             for i in range(len(data)):
                 if data[i]:
-                    self.tableWidget.setItem(i, 7, QTableWidgetItem(tag))
+                    # 话题设置在第6列（显示为"#集五福#"的位置）
+                    self.tableWidget.setItem(i, 6, QTableWidgetItem(tag))
         except Exception as e:
-            print(e)
+            logger.error(f"设置话题失败: {str(e)}")
 
-    def finish(self, i):
+    def finish(self, stats):
         """
-        执行完成
-        Returns:
+        处理任务完成的回调函数
+        :param stats: 包含任务完成的统计信息的字典
         """
-        if self.thread.model == 0:
-            QMessageBox.information(self, "完成", "任务领取完成")
-        if self.thread.model == 1:
-            QMessageBox.information(self, "完成", "视频上传完成")
-        if self.thread.model == 2:
-            QMessageBox.information(self, "完成", "今日推荐更新完毕")
-        if self.thread.model == 3:
-            QMessageBox.information(self, "完成", "删除不推荐视频完成")
-        self.update_button()
-        self.timer_db.stop()
-        self.init_ui()
+        try:
+            if self.thread.model == 0:
+                QMessageBox.information(self, "完成", "任务完成")
+            elif self.thread.model == 1:
+                if isinstance(stats, dict):
+                    # 构建统计信息字符串
+                    total = stats.get('total', 0)
+                    success = stats.get('success', 0)
+                    failed = stats.get('failed', 0)
+                    time_spent = stats.get('time_spent', {})
+                    
+                    hours = time_spent.get('hours', 0)
+                    minutes = time_spent.get('minutes', 0)
+                    seconds = time_spent.get('seconds', 0)
+                    
+                    # 构建时间字符串
+                    time_str = ""
+                    if hours > 0:
+                        time_str += f"{hours}小时"
+                    if minutes > 0:
+                        time_str += f"{minutes}分钟"
+                    if seconds > 0 or not time_str:  # 如果没有小时和分钟，至少显示秒数
+                        time_str += f"{seconds}秒"
+                    
+                    msg = f"上传完成！\n\n总计视频：{total}个\n成功：{success}个\n失败：{failed}个\n\n总耗时：{time_str}"
+                    QMessageBox.information(self, "完成", msg)
+                else:
+                    QMessageBox.information(self, "完成", "视频上传完成")
+            elif self.thread.model == 2:
+                QMessageBox.information(self, "完成", "推荐更新完成")
+            elif self.thread.model == 3:
+                QMessageBox.information(self, "完成", "删除非推荐视频完成")
+            elif self.thread.model == 4:
+                QMessageBox.information(self, "完成", "获取子账号完成")
+                
+            # 更新UI状态
+            self.update_button()
+            self.timer_db.stop()
+            self.init_ui()
+            
+        except Exception as e:
+            logger.error(f"处理完成事件时发生错误: {str(e)}")
+            QMessageBox.warning(self, "警告", "处理完成事件时发生错误")
 
     def update_table_recommend(self, data: (int, int)):
         """
@@ -655,40 +750,52 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         """
         更新删除不推荐视频数量
         Args:
-            data:
-
-        Returns:
-
+            data: (行索引, 删除数量)
         """
-        count = int(self.tableWidget.item(data[0], 8).text()) + data[1]
-        self.tableWidget.setItem(data[0], 8, QTableWidgetItem(str(count)))
-        self.df.at[data[0], "删除不可推荐"] = count
+        try:
+            # 删除不可推荐在第7列（空白列的位置）
+            current_count = int(self.tableWidget.item(data[0], 7).text()) if self.tableWidget.item(data[0], 7) and self.tableWidget.item(data[0], 7).text() else 0
+            new_count = current_count + data[1]
+            self.tableWidget.setItem(data[0], 7, QTableWidgetItem(str(new_count)))
+            self.df.at[data[0], "删除不可推荐"] = new_count
+        except Exception as e:
+            logger.error(f"更新删除不推荐视频数量失败: {str(e)}")
 
     def update_table_upload(self, i):
         """
         视频上传完成，更新界面信息
-        Returns:
-
+        Args:
+            i: 行索引
         """
         try:
-            # 更新成功计数
+            # 更新成功计数（倒数第三列）
             current_columns = self.tableWidget.columnCount()
             success_count = int(self.tableWidget.item(i, current_columns - 3).text()) + 1
             self.tableWidget.setItem(i, current_columns - 3, QTableWidgetItem(str(success_count)))
             
-            # 更新最近发布时间
+            # 更新最近发布时间（倒数第一列）
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             self.tableWidget.setItem(i, current_columns - 1, QTableWidgetItem(current_time))
             self.df.at[i, "last_publish_time"] = current_time
             
-            # 更新total_uploads
+            # 更新total_uploads（第6列）
             count = int(self.tableWidget.item(i, 5).text()) + 1
             self.tableWidget.setItem(i, 5, QTableWidgetItem(str(count)))
             self.df.at[i, "total_uploads"] = count
-            self.df.at[i, "当前上传数"] = self.df.iloc[i]["当前上传数"] + 1
-            self.df.at[i, "total_files"] = self.df.iloc[i]["total_files"] - 1
-            self.tableWidget.setItem(i, 6, QTableWidgetItem(str(self.df.iloc[i]["当前上传数"])))
-            self.tableWidget.setItem(i, 9, QTableWidgetItem(str(self.df.iloc[i]["total_files"])))
+
+            # 更新总文件数（第9列）
+            try:
+                total_files = int(self.tableWidget.item(i, 8).text()) - 1
+                if total_files < 0:
+                    total_files = 0
+                self.tableWidget.setItem(i, 8, QTableWidgetItem(str(total_files)))
+                self.df.at[i, "total_files"] = total_files
+            except:
+                pass
+
+            # 保存到数据库
+            update_existing_fields(self.df.iloc[[i]])
+            
         except Exception as e:
             logger.error(f"更新表格失败: {str(e)}")
 
@@ -1150,6 +1257,53 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                     show_row = True
                     break
             self.tableWidget.setRowHidden(row, not show_row)
+
+    def verify_key_periodically(self):
+        """
+        定期验证密钥
+        """
+        try:
+            # 从配置文件读取密钥
+            if os.path.exists('.keyconfig'):
+                with open('.keyconfig', 'r') as f:
+                    config = json.load(f)
+                    api_key = config.get('key')
+                    if api_key:
+                        # 验证密钥
+                        if not verify_key(api_key):
+                            logger.error("密钥验证失败")
+                            QMessageBox.critical(self, "错误", "密钥验证失败，请重新输入有效的密钥")
+                            # 停止所有任务
+                            if self.thread.isRunning():
+                                self.stop_tasks()
+                            # 禁用所有功能按钮
+                            self.disable_all_buttons()
+                        else:
+                            logger.info("密钥验证成功")
+                    else:
+                        logger.error("未找到密钥")
+                        QMessageBox.critical(self, "错误", "未找到密钥，请输入有效的密钥")
+            else:
+                logger.error("未找到密钥配置文件")
+                QMessageBox.critical(self, "错误", "未找到密钥配置文件，请重新输入密钥")
+        except Exception as e:
+            logger.error(f"验证密钥时发生错误: {str(e)}")
+
+    def disable_all_buttons(self):
+        """
+        禁用所有功能按钮
+        """
+        try:
+            # 禁用所有功能按钮
+            for button in [self.pushButton, self.pushButton_2, 
+                         self.pushButton_3, self.pushButton_4, 
+                         self.pushButton_5, self.pushButton_6,
+                         self.pushButton_7, self.pushButton_8,
+                         self.pushButton_9, self.pushButton_10,
+                         self.pushButton_11, self.pushButton_12]:
+                button.setEnabled(False)
+        except Exception as e:
+            logger.error(f"禁用按钮时发生错误: {str(e)}")
 
 
 def show_key_verification():
