@@ -11,12 +11,13 @@ from key_verification import verify_key
 import multiprocessing
 import logging
 import json
+import requests
 
 warnings.filterwarnings("ignore")
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QBrush, QColor, QPainter, QFont, QIcon
 from PyQt5.QtWidgets import QMainWindow, QApplication, QTableWidgetItem, QCheckBox, QHBoxLayout, QWidget, QPushButton, \
-    QFileDialog, QMessageBox, QAbstractItemView, QVBoxLayout, QLabel, QLineEdit
+    QFileDialog, QMessageBox, QAbstractItemView, QVBoxLayout, QLabel, QLineEdit, QComboBox
 from ui.ui import Ui_MainWindow
 from zfb import *
 import pandas as pd
@@ -312,21 +313,20 @@ class Thread(QThread):
                 self.df.iloc[i]["cookies_dict"], 
                 self.df.iloc[i]["folder_path"],
                 self.df.iloc[i]["topic_settings"],
-                scheduleTime,  # 传递处理后的定时发布时间
+                scheduleTime=scheduleTime,
                 max_workers=self.max_workers, 
                 appid=self.df.iloc[i]["appid"], 
                 index=i,
                 max_uploads=self.df.iloc[i]["total_uploads"], 
-                delete_original=self.delete_original
+                delete_original=self.delete_original,
+                topic_info=self.df.iloc[i].get("topic_info")  # 添加话题信息
             )
             
-            if isinstance(stats, dict):
-                stats["success_count"] = stats.get("success", 0)
             return stats
             
         except Exception as e:
             logger.error(f"upload_publish_video报错:{e}")
-            return {"success": False, "index": i, "success_count": 0}
+            return {"success": False, "index": i}
 
 
 class MainWindow(QMainWindow, Ui_MainWindow):
@@ -334,6 +334,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         try:
             logger.info("开始初始化主窗口...")
             super().__init__()
+            
+            # 创建数据库长连接
+            self.conn = sqlite3.connect('data.db', check_same_thread=False)
             
             # 日志管理初始化
             self.log_file_path = "log.log"
@@ -418,8 +421,59 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.file_check_timer.timeout.connect(self.update_file_counts)
             self.file_check_timer.start(300000)  # 每5分钟检查一次
 
-            # 连接搜索框信号
-            self.search_input.textChanged.connect(self.filter_table)
+            # 创建话题搜索布局
+            self.topic_layout = QHBoxLayout()
+            
+            # 创建话题搜索输入框
+            self.topic_search = QLineEdit()
+            self.topic_search.setPlaceholderText("输入关键词搜索话题")
+            self.topic_search.setMaximumWidth(200)  # 限制输入框宽度
+            
+            # 创建话题下拉框
+            self.topic_combo = QComboBox()
+            self.topic_combo.setMinimumWidth(200)
+            self.topic_combo.setMaxVisibleItems(10)  # 设置最大显示项数
+            self.topic_combo.setEditable(True)  # 设置为可编辑
+            self.topic_combo.lineEdit().setPlaceholderText("点击搜索话题")  # 设置占位文本
+            # 添加标志位，避免循环搜索
+            self.is_updating_topics = False
+            # 保存话题信息的字典
+            self.topic_info = {}
+            self.topic_combo.lineEdit().textChanged.connect(self.search_topics)  # 输入文字时搜索
+            self.topic_combo.activated.connect(self.on_topic_selected)  # 选择话题时触发
+            
+            # 设置下拉框样式
+            self.topic_combo.setStyleSheet("""
+                QComboBox {
+                    border: 1px solid #ccc;
+                    border-radius: 3px;
+                    padding: 1px 18px 1px 3px;
+                    min-width: 6em;
+                }
+                QComboBox::drop-down {
+                    border: 0px;
+                }
+                QComboBox::down-arrow {
+                    width: 12px;
+                    height: 12px;
+                }
+                QComboBox QAbstractItemView {
+                    border: 1px solid #ccc;
+                    background: white;
+                    selection-background-color: #e6e6e6;
+                }
+            """)
+            
+            # 将控件添加到布局
+            self.topic_layout.addWidget(QLabel("话题搜索:"))  # 添加标签
+            self.topic_layout.addWidget(self.topic_combo)
+            self.topic_layout.addStretch()  # 添加弹性空间
+            
+            # 将话题搜索布局添加到现有布局中
+            self.horizontalLayout_3.addLayout(self.topic_layout)
+
+            # 添加话题信息存储
+            self.current_topic_info = None
 
         except Exception as e:
             logger.error(f"主窗口初始化失败: {str(e)}")
@@ -673,15 +727,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         try:
             data = self.get_check_row()
             tag = self.lineEdit_2.text()
+            if not tag:
+                QMessageBox.warning(self, "警告", "请输入或选择话题")
+                return
+                
             self.df.loc[data, "topic_settings"] = tag
             df = self.df.loc[data]
             update_existing_fields(df)
+            
             for i in range(len(data)):
                 if data[i]:
-                    # 话题设置在第6列（显示为"#集五福#"的位置）
                     self.tableWidget.setItem(i, 6, QTableWidgetItem(tag))
+                    
         except Exception as e:
             logger.error(f"设置话题失败: {str(e)}")
+            QMessageBox.warning(self, "错误", f"设置话题失败: {str(e)}")
 
     def finish(self, stats):
         """
@@ -725,8 +785,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 
             # 更新UI状态
             self.update_button()
-            self.timer_db.stop()
-            self.init_ui()
+            self.init_ui()  # 直接从数据库重新加载数据
             
         except Exception as e:
             logger.error(f"处理完成事件时发生错误: {str(e)}")
@@ -763,38 +822,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def update_table_upload(self, i):
         """
-        视频上传完成，更新界面信息
+        视频上传完成后更新界面信息
         Args:
             i: 行索引
         """
         try:
-            # 更新成功计数（倒数第三列）
-            current_columns = self.tableWidget.columnCount()
-            success_count = int(self.tableWidget.item(i, current_columns - 3).text()) + 1
-            self.tableWidget.setItem(i, current_columns - 3, QTableWidgetItem(str(success_count)))
-            
-            # 更新最近发布时间（倒数第一列）
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            self.tableWidget.setItem(i, current_columns - 1, QTableWidgetItem(current_time))
-            self.df.at[i, "last_publish_time"] = current_time
-            
-            # 更新total_uploads（第6列）
-            count = int(self.tableWidget.item(i, 5).text()) + 1
-            self.tableWidget.setItem(i, 5, QTableWidgetItem(str(count)))
-            self.df.at[i, "total_uploads"] = count
-
-            # 更新总文件数（第9列）
-            try:
-                total_files = int(self.tableWidget.item(i, 8).text()) - 1
-                if total_files < 0:
-                    total_files = 0
-                self.tableWidget.setItem(i, 8, QTableWidgetItem(str(total_files)))
-                self.df.at[i, "total_files"] = total_files
-            except:
-                pass
-
-            # 保存到数据库
-            update_existing_fields(self.df.iloc[[i]])
+            # 直接从数据库重新读取数据并更新界面
+            self.init_ui()
             
         except Exception as e:
             logger.error(f"更新表格失败: {str(e)}")
@@ -811,9 +845,15 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.tableWidget.setItem(i, 4, item)
 
     def init_ui(self):
-        self.df = pd.read_sql("select * from user_data", conn)
-        self.df['cookies_dict'] = self.df['cookies'].apply(json.loads)
-        self.show_table(self.df)
+        """从数据库读取并显示数据"""
+        try:
+            # 使用长连接读取数据
+            self.df = pd.read_sql("select * from user_data", self.conn)
+            self.df['cookies_dict'] = self.df['cookies'].apply(json.loads)
+            self.show_table(self.df)
+        except Exception as e:
+            logger.error(f"初始化UI失败: {str(e)}")
+            print(f"初始化UI失败: {str(e)}")
 
     def login(self):
         try:
@@ -920,70 +960,104 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         绑定文件夹
         Args:
             data: (appid, row)
-
-        Returns:
-
         """
-        # 打开文件夹选择对话框
-        folder_path = QFileDialog.getExistingDirectory(self, "选择文件夹")
-
-        if not folder_path:
-            QMessageBox.information(self, "提示", "未选择文件夹")
-            return
-
-        video_count = self.get_video_count(folder_path)
-        button = self.sender()
-        if video_count > 0:
-            button.setStyleSheet("""
-            background-color:rgb(90, 212, 105)""")
-        else:
-            button.setStyleSheet("""
-            background-color: rgb(227, 61, 48)""")
-        self.tableWidget.setItem(data[1], 10, QTableWidgetItem(str(folder_path)))
         try:
-            self.df.at[data[1], "folder_path"] = folder_path
-            self.df.at[data[1], "total_files"] = video_count
-            appid = self.df.iloc[data[1]]["appid"]
-            df = self.df[self.df["appid"] == appid]
-            update_existing_fields(df)
-            self.update_video_count(data[1], video_count)
+            # 打开文件夹选择对话框
+            folder_path = QFileDialog.getExistingDirectory(self, "选择文件夹")
+
+            if not folder_path:
+                QMessageBox.information(self, "提示", "未选择文件夹")
+                return
+
+            # 检查文件夹是否存在
+            if not os.path.exists(folder_path):
+                QMessageBox.warning(self, "错误", "选择的文件夹不存在")
+                return
+
+            try:
+                video_count = self.get_video_count(folder_path)
+            except Exception as e:
+                logger.error(f"获取视频数量失败: {str(e)}")
+                QMessageBox.warning(self, "错误", f"获取视频数量失败: {str(e)}")
+                return
+
+            # 更新按钮样式
+            button = self.sender()
+            if button:
+                if video_count > 0:
+                    button.setStyleSheet("background-color: rgb(90, 212, 105)")
+                else:
+                    button.setStyleSheet("background-color: rgb(227, 61, 48)")
+
+            # 更新表格
+            self.tableWidget.setItem(data[1], 10, QTableWidgetItem(str(folder_path)))
+            self.tableWidget.setItem(data[1], 8, QTableWidgetItem(str(video_count)))
+
+            try:
+                # 检查数据库连接
+                if not hasattr(self, 'conn') or self.conn is None:
+                    self.conn = sqlite3.connect('data.db', check_same_thread=False)
+
+                # 更新DataFrame
+                self.df.at[data[1], "folder_path"] = folder_path
+                self.df.at[data[1], "total_files"] = video_count
+                appid = self.df.iloc[data[1]]["appid"]
+                
+                # 使用参数化查询更新数据库
+                cursor = self.conn.cursor()
+                cursor.execute("""
+                    UPDATE user_data 
+                    SET folder_path = ?, total_files = ?
+                    WHERE appid = ?
+                """, (folder_path, video_count, appid))
+                self.conn.commit()
+
+            except sqlite3.Error as e:
+                logger.error(f"数据库更新失败: {str(e)}")
+                QMessageBox.warning(self, "错误", f"数据库更新失败: {str(e)}")
+                # 尝试重新连接数据库
+                try:
+                    self.conn = sqlite3.connect('data.db', check_same_thread=False)
+                    self.init_ui()
+                except Exception as e:
+                    logger.error(f"数据库重连失败: {str(e)}")
+                    QMessageBox.critical(self, "严重错误", "数据库连接失败，请重启应用")
+                return
+
         except Exception as e:
-            print(e)
-
-    def get_check_row(self):
-        """
-        获取到选中的所有行
-        Returns:
-
-        """
-        row = self.tableWidget.rowCount()
-        data = []
-        for i in range(row):
-            cell_widget = self.tableWidget.cellWidget(i, 0)
-            if isinstance(cell_widget, QCheckBox):
-                data.append(cell_widget.isChecked())
-        self.df["check_"] = data
-        update_existing_fields(self.df)
-        return data
+            logger.error(f"绑定文件夹失败: {str(e)}")
+            QMessageBox.warning(self, "错误", f"绑定文件夹失败: {str(e)}")
 
     @staticmethod
     def get_video_count(path: str) -> int:
-        video_count = 0
-        if os.path.exists(path):
-            video_extensions = {'.mp4'}
-
-            video_count = sum(1 for file in os.listdir(path)
-                              if os.path.isfile(os.path.join(path, file)) and os.path.splitext(file)[
-                                  1].lower() in video_extensions)
-
-        return video_count
-
-    def update_video_count(self, row, count):
+        """
+        获取文件夹中的视频文件数量
+        Args:
+            path: 文件夹路径
+        Returns:
+            int: 视频文件数量
+        """
         try:
+            if not os.path.exists(path):
+                return 0
 
-            self.tableWidget.setItem(row, 8, QTableWidgetItem(str(count)))
+            video_extensions = {'.mp4'}
+            video_count = 0
+
+            for file in os.listdir(path):
+                try:
+                    if os.path.isfile(os.path.join(path, file)) and \
+                       os.path.splitext(file)[1].lower() in video_extensions:
+                        video_count += 1
+                except Exception as e:
+                    logger.error(f"处理文件 {file} 时出错: {str(e)}")
+                    continue
+
+            return video_count
+
         except Exception as e:
-            print(e)
+            logger.error(f"获取视频数量时出错: {str(e)}")
+            return 0
 
     def update_button(self):
         """更新按钮状态"""
@@ -1028,43 +1102,37 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             QMessageBox.warning(self, "错误", f"领取任务失败: {str(e)}")
 
     def start_upload(self):
-        """开始上传任务"""
+        """开始上传视频"""
         try:
-            logger.info("开始上传")
+            logger.info("开始上传视频")
             self.thread.model = 1
-            
-            # 设置定时配置
-            if self.radioButton.isChecked():
-                self.thread.timing = self.timeEdit.text()
-                self.thread.web_timing = None
-            elif self.radioButton_2.isChecked():
-                self.thread.web_timing = self.dateTimeEdit.text()
-                self.thread.timing = None
-            else:
-                self.thread.web_timing = None
-                self.thread.timing = None
-            
-            # 设置删除视频配置
-            self.thread.delete_original = self.delete_video_checkbox.isChecked()
-            
-            # 准备数据
             df = self.get_df()
             data = self.get_check_row()
             df = df.loc[data]
+            
+            # 获取定时发布时间
+            if self.radioButton_2.isChecked():  # 如果选择了定时发布
+                self.thread.web_timing = self.dateTimeEdit.text()
+            else:
+                self.thread.web_timing = None
+            
+            # 设置是否删除原视频
+            self.thread.delete_original = self.delete_video_checkbox.isChecked()
+            
+            # 更新话题信息
+            if self.current_topic_info:
+                df['topic_info'] = [self.current_topic_info] * len(df)
+            
             update_existing_fields(df)
             self.thread.df = df
-            self.thread.max_workers = int(self.lineEdit.text())
-
-            # 启动线程
             self.thread.start()
             self.timer_db.start(1000)
-            
-            # 更新按钮状态
             self.update_button()
             
         except Exception as e:
-            logger.error(f"启动上传任务失败: {str(e)}")
-            QMessageBox.warning(self, "错误", f"启动任务失败: {str(e)}")
+            logger.error(f"上传过程发生错误: {str(e)}")
+            QMessageBox.critical(self, "错误", f"上传失败: {str(e)}")
+            return
 
     def get_today_recommendations(self):
         """
@@ -1224,7 +1292,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                     ''', (video_count, appid))
                     
                     # 更新界面
-                    self.tableWidget.setItem(i, 8, QTableWidgetItem(str(video_count)))  # 8是文件总数列的索引
+                    self.tableWidget.setItem(i, 8, QTableWidgetItem(str(video_count)))
                     
                     # 更新DataFrame
                     self.df.at[i, "total_files"] = video_count
@@ -1304,6 +1372,156 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 button.setEnabled(False)
         except Exception as e:
             logger.error(f"禁用按钮时发生错误: {str(e)}")
+
+    def search_topics(self):
+        """
+        根据输入的关键词搜索话题
+        """
+        try:
+            # 如果正在更新话题列表，直接返回
+            if self.is_updating_topics:
+                return
+
+            keywords = self.topic_combo.currentText().strip()
+            # 如果关键词带有#号，不触发搜索
+            if keywords.startswith('#') and keywords.endswith('#'):
+                return
+                
+            if not keywords:
+                self.topic_combo.clear()
+                self.topic_info.clear()  # 清空话题信息
+                return
+                
+            # 获取当前选中行的cookies和appId
+            selected_rows = []
+            for i in range(self.tableWidget.rowCount()):
+                checkbox = self.tableWidget.cellWidget(i, 0)
+                if isinstance(checkbox, QCheckBox) and checkbox.isChecked():
+                    selected_rows.append(i)
+                    
+            if not selected_rows:
+                QMessageBox.warning(self, "警告", "请先选择账号")
+                return
+                
+            row = selected_rows[0]
+            cookies = self.df.iloc[row]["cookies_dict"]
+            appid = self.df.iloc[row]["appid"]
+            
+            # 请求话题推荐接口
+            headers = {
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'zh-CN,zh;q=0.9',
+                'Connection': 'keep-alive',
+                'Content-Type': 'application/json;charset=UTF-8',
+                'Origin': 'https://c.alipay.com',
+                'Referer': 'https://c.alipay.com/',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            }
+            
+            params = {
+                '_input_charset': 'utf-8',
+                '_output_charset': 'utf-8',
+            }
+            
+            json_data = {
+                'keywords': keywords,
+                'publicId': appid,
+                'sourceId': 'S',
+            }
+            
+            logger.info(f"搜索话题请求参数: {json_data}")
+            
+            response = requests.post(
+                'https://fuwu.alipay.com/platform/queryTopicRecommend.json',
+                params=params,
+                cookies=cookies,
+                headers=headers,
+                json=json_data,
+            )
+            
+            logger.info(f"搜索话题响应: {response.text}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("stat") == "ok":
+                    # 设置标志位，避免触发搜索
+                    self.is_updating_topics = True
+                    
+                    # 清空下拉框和话题信息
+                    self.topic_combo.clear()
+                    self.topic_info.clear()
+                    
+                    # 添加搜索结果到下拉框
+                    topics = data.get("result", [])
+                    if topics:
+                        for topic in topics:
+                            topic_name = topic.get("name", "")
+                            topic_id = topic.get("topicId", "")
+                            if topic_name:
+                                display_text = f"#{topic_name}#"
+                                self.topic_combo.addItem(display_text)
+                                # 保存话题完整信息
+                                self.topic_info[display_text] = {
+                                    'name': topic_name,
+                                    'topicId': topic_id
+                                }
+                        # 显示下拉列表
+                        self.topic_combo.showPopup()
+                        logger.info(f"找到{len(topics)}个话题")
+                    else:
+                        logger.info("未找到相关话题")
+                    
+                    # 重置标志位
+                    self.is_updating_topics = False
+                else:
+                    error_msg = data.get("errorMessage", "未知错误")
+                    logger.error(f"搜索话题失败: {error_msg}")
+            else:
+                logger.error(f"搜索话题请求失败: HTTP {response.status_code}")
+                            
+        except Exception as e:
+            logger.error(f"搜索话题失败: {str(e)}")
+            # 重置标志位
+            self.is_updating_topics = False
+
+    def on_topic_selected(self, index):
+        """当选择话题时触发"""
+        try:
+            selected_topic = self.topic_combo.currentText()
+            if selected_topic:
+                # 从话题数据中获取完整信息
+                topic_data = self.topic_info[selected_topic]
+                self.current_topic_info = {
+                    'topicInfoVOList': [{
+                        'name': selected_topic.strip('#'),  # 去掉#号
+                        'topicId': topic_data.get('topicId', '')
+                    }]
+                }
+                # 设置话题文本
+                self.lineEdit_2.setText(selected_topic)
+                logger.info(f"已选择话题: {selected_topic}, ID: {topic_data.get('topicId', '')}")
+            else:
+                self.current_topic_info = None
+                logger.info("已清除话题选择")
+        except Exception as e:
+            logger.error(f"选择话题时发生错误: {str(e)}")
+            self.current_topic_info = None
+
+    def get_check_row(self):
+        """
+        获取到选中的所有行
+        Returns:
+            list: 选中状态列表
+        """
+        row = self.tableWidget.rowCount()
+        data = []
+        for i in range(row):
+            cell_widget = self.tableWidget.cellWidget(i, 0)
+            if isinstance(cell_widget, QCheckBox):
+                data.append(cell_widget.isChecked())
+        self.df["check_"] = data
+        update_existing_fields(self.df)
+        return data
 
 
 def show_key_verification():

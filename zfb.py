@@ -10,7 +10,6 @@ import concurrent.futures
 from datetime import datetime
 import cv2
 import random
-from db import update_uploads_and_files
 from logger import logger
 import requests
 from ratelimit import limits, sleep_and_retry
@@ -1174,7 +1173,23 @@ def format_time_string(time_str):
     formatted_time = dt.strftime('%Y-%m-%d %H:%M')
     return formatted_time
 
-def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies):
+def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies, topic_info=None):
+    """
+    发布视频
+    Args:
+        loginPublicId: 账号ID
+        videoId: 视频ID
+        videoFile: 视频文件URL
+        videoFileName: 视频文件名
+        extProperty: 封面图属性
+        mt: 上传token
+        scheduleTime: 定时发布时间
+        title: 视频标题
+        cookies: cookies
+        topic_info: 话题信息
+    Returns:
+        发布结果
+    """
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9',
@@ -1243,6 +1258,11 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, s
         },
     }
 
+    # 如果有话题信息，添加到json数据中
+    if topic_info and 'topicInfoVOList' in topic_info:
+        json_data['topicInfoVOList'] = topic_info['topicInfoVOList']
+        logger.info(f"添加话题信息: {topic_info['topicInfoVOList']}")
+
     # 只有当 scheduleTime 有值时才添加到 json_data
     if scheduleTime:
         json_data['scheduleTime'] = format_time_string(scheduleTime)
@@ -1272,7 +1292,7 @@ def get_app_id(cookies):
     headers = {
         'accept': '*/*',
         'accept-language': 'zh-CN,zh;q=0.9',
-        # 'cookie': 'JSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43GZ00; mobileSendTime=-1; credibleMobileSendTime=-1; ctuMobileSendTime=-1; riskMobileBankSendTime=-1; riskMobileAccoutSendTime=-1; riskMobileCreditSendTime=-1; riskCredibleMobileSendTime=-1; riskOriginalAccountMobileSendTime=-1; session.cookieNameId=ALIPAYJSESSIONID; cna=ova4H2k/PjoBASQOA3pmflO9; receive-cookie-deprecation=1; tfstk=fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.; EXC_ANT_KEY=excashier_20001_FP_SENIOR_HJPGP11505070830582; LoginForm=alipay_login_auth; CLUB_ALIPAY_COM=2088442960985162; iw.userid="K1iSL120ipFvFLCnWp3Rzw=="; ali_apache_tracktmp="uid=2088442960985162"; ALI_PAMIR_SID=U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2; __TRACERT_COOKIE_bucUserId=2088442960985162; userId=2088442960985162; auth_goto_http_type=https; ctoken=gwha_z9s2Q7fFA04; _CHIPS-ctoken=gwha_z9s2Q7fFA04; alipay="K1iSL120ipFvFLCnWp3Rz9W5rYlr9VP9dcKwk8Zv/g=="; auth_jwt=e30.eyJleHAiOjE3MzM3NjEzNzQyOTksInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoiN1VvMlR2b0pXeGlqNmZ5THhSeTc5Z1RGZy9xM2dOYzY5YjExNGRzIiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9.iBv6JdB5Iaq4HWm_UgK0hroK58cDunVi-Xp6G_YiAr4; _CHIPS-ALIPAYJSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43; zone=GZ00F; ALIPAYJSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43GZ00; rtk=D5UPEMOnt+FpPIbyy5BMpuCl6tPqnx3obAScmr4CZ1cRnx8YZVO; JSESSIONID=717E1A1BA7F45E250873B276DABB2C55; spanner=zYmpAhTHmR4faZIwLuJsT2xROgo9NkOZ',
+        # 'cookie': 'JSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43GZ00; mobileSendTime=-1; credibleMobileSendTime=-1; ctuMobileSendTime=-1; riskMobileBankSendTime=-1; riskMobileAccoutSendTime=-1; riskMobileCreditSendTime=-1; riskCredibleMobileSendTime=-1; riskOriginalAccountMobileSendTime=-1; session.cookieNameId=ALIPAYJSESSIONID; cna=ova4H2k/PjoBASQOA3pmflO9; receive-cookie-deprecation=1; tfstk=fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.; EXC_ANT_KEY=excashier_20001_FP_SENIOR_HJPGP11505070830582; LoginForm=alipay_login_auth; CLUB_ALIPAY_COM=2088442960985162; iw.userid="K1iSL120ipFvFLCnWp3Rzw=="; ali_apache_tracktmp="uid=2088442960985162"; ALI_PAMIR_SID=U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2; __TRACERT_COOKIE_bucUserId=2088442960985162; auth_goto_http_type=https; ctoken=gwha_z9s2Q7fFA04; _CHIPS-ctoken=gwha_z9s2Q7fFA04; alipay="K1iSL120ipFvFLCnWp3Rz9W5rYlr9VP9dcKwk8Zv/g=="; auth_jwt=e30.eyJleHAiOjE3MzM3NjEzNzQyOTksInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoiN1VvMlR2b0pXeGlqNmZ5THhSeTc5Z1RGZy9xM2dOYzY5YjExNGRzIiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9.iBv6JdB5Iaq4HWm_UgK0hroK58cDunVi-Xp6G_YiAr4; _CHIPS-ALIPAYJSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43; zone=GZ00F; ALIPAYJSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43GZ00; rtk=D5UPEMOnt+FpPIbyy5BMpuCl6tPqnx3obAScmr4CZ1cRnx8YZVO; JSESSIONID=717E1A1BA7F45E250873B276DABB2C55; spanner=zYmpAhTHmR4faZIwLuJsT2xROgo9NkOZ',
         'origin': 'https://c.alipay.com',
         'priority': 'u=1, i',
         'referer': 'https://c.alipay.com/',
@@ -1333,7 +1353,13 @@ def create_cover_from_video(video_path, output_path=None):
         # 打开视频文件
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            logger.info(f"无法打开视频文件: {video_path}")
+            logger.error(f"无法打开视频文件: {video_path}")
+            try:
+                # 删除无法打开的视频文件
+                os.remove(video_path)
+                logger.info(f"已删除无法打开的视频文件: {video_path}")
+            except Exception as e:
+                logger.error(f"删除视频文件失败: {str(e)}")
             return None
 
         try:
@@ -1349,7 +1375,13 @@ def create_cover_from_video(video_path, output_path=None):
             # 读取帧
             ret, frame = cap.read()
             if not ret or frame is None:
-                logger.info(f"无法读取指定帧: {video_path}")
+                logger.error(f"无法读取指定帧: {video_path}")
+                try:
+                    # 删除无法读取帧的视频文件
+                    os.remove(video_path)
+                    logger.info(f"已删除无法读取帧的视频文件: {video_path}")
+                except Exception as e:
+                    logger.error(f"删除视频文件失败: {str(e)}")
                 return None
 
             # 转换颜色空间
@@ -1401,9 +1433,16 @@ def create_cover_from_video(video_path, output_path=None):
 
         finally:
             cap.release()
-
+            
     except Exception as e:
         logger.error(f"创建封面图过程发生异常: {str(e)}")
+        try:
+            # 如果处理过程中出现任何错误，删除视频文件
+            if os.path.exists(video_path):
+                os.remove(video_path)
+                logger.info(f"已删除处理失败的视频文件: {video_path}")
+        except Exception as del_e:
+            logger.error(f"删除视频文件失败: {str(del_e)}")
         import traceback
         logger.error(traceback.format_exc())
         return None
@@ -1442,9 +1481,14 @@ def process_single_video(args):
     if thread_control.should_stop():
         return False
         
-    cookies, file_path, scheduleTime, title, appid, index, delete_original = args
+    cookies, file_path, scheduleTime, title, appid, index, delete_original, topic_info = args
     video_name = os.path.basename(file_path)
     logger.info(f"开始处理视频: {video_name}")
+    logger.info(f"处理参数:")
+    logger.info(f"scheduleTime: {scheduleTime}")
+    logger.info(f"title: {title}")
+    logger.info(f"appid: {appid}")
+    logger.info(f"topic_info: {topic_info}")
 
     try:
         # 验证定时发布时间
@@ -1521,7 +1565,18 @@ def process_single_video(args):
             return False
             
         logger.info(f"发布视频内容 - {video_name}")
-        publish_result = publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies)
+        logger.info(f"发布参数:")
+        logger.info(f"appid: {appid}")
+        logger.info(f"file_id: {file_id}")
+        logger.info(f"videoFile: {videoFile}")
+        logger.info(f"videoFileName: {videoFileName}")
+        logger.info(f"extProperty: {extProperty}")
+        logger.info(f"mt: {mt}")
+        logger.info(f"scheduleTime: {scheduleTime}")
+        logger.info(f"title: {title}")
+        logger.info(f"topic_info: {topic_info}")
+        
+        publish_result = publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies, topic_info)
         
         if publish_result:
             # 更新发布日期和成功统计
@@ -1561,7 +1616,7 @@ def process_single_video(args):
 
 
 def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3, appid=None, index=None,
-                         max_uploads=None, delete_original=True):
+                         max_uploads=None, delete_original=True, topic_info=None):
     try:
         # 记录开始时间
         start_time = time.time()
@@ -1582,7 +1637,7 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
         failed_count = 0
         total_count = len(video_files)
         
-        thread_args = [(cookies, file_path, scheduleTime, title, appid, index, delete_original) 
+        thread_args = [(cookies, file_path, scheduleTime, title, appid, index, delete_original, topic_info) 
                       for file_path in video_files]
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
