@@ -957,111 +957,123 @@ def upload_4m_video(mt, file_path):
 
 def upload_large_video(mt, file_path, file_size):
     # 打开文件
-    with open(file_path, 'rb') as file:
-        # 构建文件数据
-        files = {
-            'file': (file.name, file, 'video/mp4')  # 'file' 是表单字段名，file.name 是文件名，'video/mp4' 是文件的 MIME 类型
-        }
-
-        headers = {
-            'accept': 'application/json, text/plain, */*',
-            'accept-language': 'zh-CN,zh;q=0.9',
-            'origin': 'https://c.alipay.com',
-            'priority': 'u=1, i',
-            'referer': 'https://c.alipay.com/',
-            'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-site',
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'x-mass-appkey': 'apwallet',
-            'x-mass-biztype': 'content_lifetab',
-            'x-mass-cust-conf': '{"extern":{"isWaterMark":true}}',
-            'x-mass-file-length': str(file_size),
-            'x-mass-file-md5': calculate_file_md5(file),
-            'x-mass-file-multipart-slice-size': '4194304',
-            'x-mass-filename': urllib.parse.quote(file.name),
-            'x-mass-public': 'false',
-            'x-mass-token': mt,
-            'x-mass-traceid': get_traid(),
-        }
-
-        response = requests.post('https://mass.alipay.com/file/multipart/upload/claim', headers=headers)
-        file_id = json.loads(response.text).get('data').get('fileId')
-
-    def upload_part(args):
-        """上传单个分块的函数"""
-        try:
-            part_num, part_data, start_pos = args
-            headers = {
-                'accept': 'application/json, text/plain, */*',
-                'accept-language': 'zh-CN,zh;q=0.9',
-                'origin': 'https://c.alipay.com',
-                'referer': 'https://c.alipay.com/',
-                'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"Windows"',
-                'sec-fetch-dest': 'empty',
-                'sec-fetch-mode': 'cors',
-                'sec-fetch-site': 'same-site',
-                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                'x-mass-appkey': 'apwallet',
-                'x-mass-biztype': 'content_lifetab',
-                'x-mass-file-multipart-id': file_id,
-                'x-mass-file-multipart-length': str(len(part_data)),
-                'x-mass-file-multipart-num': str(part_num),
-                'x-mass-file-multipart-start': str(start_pos),
-                'x-mass-token': mt,
-                'x-mass-traceid': get_traid()
-            }
-
-            files = {
-                'file': ('blob', part_data, 'application/octet-stream'),
-            }
-
-            response = requests.post('https://mass.alipay.com/file/multipart/upload/part', headers=headers, files=files)
-            logger.info(f"分块 {part_num} 上传完成，大小: {len(part_data)}")
-            logger.info(f"分块 {part_num} 响应: {response.json()}")
-            return response.json()
-        except Exception as e:
-            logger.error(f"分块 {part_num} 上传失败: {str(e)}")
-            raise
-
-    with open(file_path, 'rb') as file:
-        # 设置分割后的最大文件大小
-        max_size = 4 * 1024 * 1024  # 4MB
-        # 计算文件的分块数
-        num_parts = (file_size // max_size) + (1 if file_size % max_size else 0)
-        
-        # 准备所有分块的数据
-        upload_args = []
-        for i in range(num_parts):
-            part_data = file.read(max_size)
-            if not part_data:
-                break
-            upload_args.append((i + 1, part_data, i * max_size))
-
-        # 使用线程池并行上传分块
-        max_workers = min(10, num_parts)  # 最多10个线程
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-            for args in upload_args:
-                future = executor.submit(upload_part, args)
-                futures.append(future)
-
-            # 等待所有分块上传完成
-            for future in concurrent.futures.as_completed(futures):
+    try:
+        with open(file_path, 'rb') as f:
+            # 计算分片数量
+            chunk_size = 4 * 1024 * 1024  # 4MB
+            total_chunks = (file_size + chunk_size - 1) // chunk_size
+            
+            # 初始化上传
+            file_id = None
+            retry_count = 0
+            max_retries = 3
+            
+            while retry_count < max_retries:
                 try:
-                    future.result()  # 检查是否有异常
+                    response = requests.post(
+                        'https://mass.alipay.com/file/multipart/upload/init',
+                        headers={
+                            'x-upload-mt': mt,
+                            'x-upload-size': str(file_size),
+                            'x-upload-type': 'video'
+                        }
+                    )
+                    response.raise_for_status()
+                    file_id = response.json()['data']['fileId']
+                    break
                 except Exception as e:
-                    logger.error(f"分块上传失败: {str(e)}")
-                    raise  # 重新抛出异常
+                    retry_count += 1
+                    if retry_count == max_retries:
+                        logger.error(f"初始化上传失败: {str(e)}")
+                        raise
+                    time.sleep(2)  # 等待2秒后重试
+            
+            if not file_id:
+                raise Exception("无法获取文件ID")
+            
+            # 创建线程池上传分片
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                chunk_args = []
+                for chunk_number in range(total_chunks):
+                    start = chunk_number * chunk_size
+                    end = min(start + chunk_size, file_size)
+                    f.seek(start)
+                    chunk_data = f.read(end - start)
+                    
+                    args = {
+                        'mt': mt,
+                        'file_id': file_id,
+                        'chunk_number': chunk_number,
+                        'chunk_data': chunk_data,
+                        'total_chunks': total_chunks
+                    }
+                    chunk_args.append(args)
+                
+                # 提交所有分片上传任务
+                futures = []
+                for args in chunk_args:
+                    future = executor.submit(upload_part, args)
+                    futures.append(future)
+                
+                # 等待所有分片上传完成
+                for future in futures:
+                    try:
+                        result = future.result()
+                        if not result:
+                            raise Exception("分片上传失败")
+                    except Exception as e:
+                        logger.error(f"分片上传出错: {str(e)}")
+                        raise
+            
+            return file_id
+            
+    except Exception as e:
+        logger.error(f"视频上传失败: {str(e)}")
+        raise
 
-    # 完成上传
-    upload_complete(mt, file_id)
-    return file_id, file.name
+def upload_part(args):
+    """上传单个分片，带有重试机制"""
+    mt = args['mt']
+    file_id = args['file_id']
+    chunk_number = args['chunk_number']
+    chunk_data = args['chunk_data']
+    total_chunks = args['total_chunks']
+    
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            response = requests.post(
+                'https://mass.alipay.com/file/multipart/upload/part',
+                headers={
+                    'x-upload-mt': mt,
+                    'x-upload-file-id': file_id,
+                    'x-upload-chunk-number': str(chunk_number),
+                    'x-upload-chunk-total': str(total_chunks)
+                },
+                data=chunk_data,
+                timeout=30  # 设置30秒超时
+            )
+            response.raise_for_status()
+            return True
+            
+        except (requests.exceptions.SSLError, 
+                requests.exceptions.ProxyError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            retry_count += 1
+            logger.warning(f"分片{chunk_number}上传失败，正在重试({retry_count}/{max_retries}): {str(e)}")
+            if retry_count == max_retries:
+                logger.error(f"分片{chunk_number}上传失败，已达到最大重试次数: {str(e)}")
+                return False
+            time.sleep(2)  # 等待2秒后重试
+            
+        except Exception as e:
+            logger.error(f"分片{chunk_number}上传时发生未知错误: {str(e)}")
+            return False
+            
+    return False
 
 
 def upload_complete(mt, file_id):

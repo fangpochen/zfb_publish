@@ -314,7 +314,7 @@ class Thread(QThread):
                 self.df.iloc[i]["folder_path"],
                 self.df.iloc[i]["topic_settings"],
                 scheduleTime=scheduleTime,
-                max_workers=self.max_workers, 
+                max_workers=int(self.max_workers),  # 确保转换为整数
                 appid=self.df.iloc[i]["appid"], 
                 index=i,
                 max_uploads=self.df.iloc[i]["total_uploads"], 
@@ -1119,6 +1119,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             # 设置是否删除原视频
             self.thread.delete_original = self.delete_video_checkbox.isChecked()
             
+            # 设置线程数
+            self.thread.max_workers = int(self.lineEdit.text())
+            logger.info(f"设置线程数为: {self.thread.max_workers}")
+            
             # 更新话题信息
             if self.current_topic_info:
                 df['topic_info'] = [self.current_topic_info] * len(df)
@@ -1340,22 +1344,26 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                         # 验证密钥
                         if not verify_key(api_key):
                             logger.error("密钥验证失败")
-                            QMessageBox.critical(self, "错误", "密钥验证失败，请重新输入有效的密钥")
+                            QMessageBox.critical(self, "错误", "密钥验证失败，程序将退出")
                             # 停止所有任务
                             if self.thread.isRunning():
                                 self.stop_tasks()
-                            # 禁用所有功能按钮
-                            self.disable_all_buttons()
+                            # 退出程序
+                            sys.exit(1)
                         else:
                             logger.info("密钥验证成功")
                     else:
                         logger.error("未找到密钥")
-                        QMessageBox.critical(self, "错误", "未找到密钥，请输入有效的密钥")
+                        QMessageBox.critical(self, "错误", "未找到密钥，程序将退出")
+                        sys.exit(1)
             else:
                 logger.error("未找到密钥配置文件")
-                QMessageBox.critical(self, "错误", "未找到密钥配置文件，请重新输入密钥")
+                QMessageBox.critical(self, "错误", "未找到密钥配置文件，程序将退出")
+                sys.exit(1)
         except Exception as e:
             logger.error(f"验证密钥时发生错误: {str(e)}")
+            QMessageBox.critical(self, "错误", f"验证密钥时发生错误: {str(e)}，程序将退出")
+            sys.exit(1)
 
     def disable_all_buttons(self):
         """

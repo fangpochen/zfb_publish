@@ -20,9 +20,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger('key_verification')
 
-server_ip='139.224.70.41'
-# server_ip='localhost'
-
 def verify_key(api_key):
     hostname = socket.gethostname()
     os_info = f"{platform.system()} {platform.release()}"
@@ -30,7 +27,7 @@ def verify_key(api_key):
     mac = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff)
                     for elements in range(0,2*6,2)][::-1])
 
-    url = f"http://{server_ip}:8000/api/v1/api-keys/verify"
+    url = "https://api.cloudoption.site/api/v1/api-keys/verify"
     headers = {"Content-Type": "application/json"}
     payload = {
         "key": api_key,
@@ -44,10 +41,11 @@ def verify_key(api_key):
     }
 
     try:
-        response = requests.post(url, json=payload, headers=headers)
+        response = requests.post(url, json=payload, headers=headers, verify=True)
         response.raise_for_status()
         result = response.json()
         logger.info(f"密钥验证结果: {result}")
         return result.get("valid", False)
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        logger.error(f"密钥验证请求失败: {str(e)}")
         return False 
