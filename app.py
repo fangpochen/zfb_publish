@@ -106,6 +106,7 @@ class Thread(QThread):
             "total": 0,
             "success": 0,
             "failed": 0,
+            "details": [],  # 存储每个视频的详细信息
             "time_spent": {
                 "hours": 0,
                 "minutes": 0,
@@ -133,8 +134,12 @@ class Thread(QThread):
                                 total_stats["success"] += result.get("success", 0)
                                 total_stats["failed"] += result.get("failed", 0)
                                 
+                                # 添加详细信息
+                                if "details" in result:
+                                    total_stats["details"].extend(result.get("details", []))
+                                
                                 # 只有在真正成功上传时才发送更新信号
-                                if result.get("success") and result.get("success_count", 0) > 0:
+                                if result.get("success", 0) > 0:
                                     self.upload_signal.emit(i)
                                     
                     elif self.model == 2:
@@ -382,15 +387,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.init_ui()
 
             self.timer_login = QTimer(self)
-            self.timer_login.timeout.connect(self.request_all)
+            self.timer_login.timeout.connect(self.timer_login_start)
             self.checkBox.stateChanged.connect(self.timer_login_start)
             if self.checkBox.isChecked():
                 self.timer_login.start(300000)
-
-            # 添加删除原视频的复选框
-            self.delete_video_checkbox = QCheckBox("上传后删除原视频")
-            self.delete_video_checkbox.setChecked(True)  # 默认勾选
-            self.horizontalLayout_2.addWidget(self.delete_video_checkbox)
 
             # 添加这些设置来启用行选择
             self.tableWidget.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -474,6 +474,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
             # 添加话题信息存储
             self.current_topic_info = None
+
+            # 启动时检查每日重置
+            self.check_daily_reset()
+            
+            # 设置定时检查
+            self.daily_reset_timer = QTimer()
+            self.daily_reset_timer.timeout.connect(self.check_daily_reset)
+            self.daily_reset_timer.start(3600000)  # 每小时检查一次
 
         except Exception as e:
             logger.error(f"主窗口初始化失败: {str(e)}")
@@ -753,10 +761,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 QMessageBox.information(self, "完成", "任务完成")
             elif self.thread.model == 1:
                 if isinstance(stats, dict):
-                    # 构建统计信息字符串
+                    # 获取统计信息
                     total = stats.get('total', 0)
                     success = stats.get('success', 0)
                     failed = stats.get('failed', 0)
+                    details = stats.get('details', [])
                     time_spent = stats.get('time_spent', {})
                     
                     hours = time_spent.get('hours', 0)
@@ -769,11 +778,35 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                         time_str += f"{hours}小时"
                     if minutes > 0:
                         time_str += f"{minutes}分钟"
-                    if seconds > 0 or not time_str:  # 如果没有小时和分钟，至少显示秒数
+                    if seconds > 0 or not time_str:
                         time_str += f"{seconds}秒"
                     
-                    msg = f"上传完成！\n\n总计视频：{total}个\n成功：{success}个\n失败：{failed}个\n\n总耗时：{time_str}"
+                    # 构建详细信息字符串
+                    detail_str = ""
+                    if details:
+                        detail_str = "\n\n详细信息:\n"
+                        for detail in details:
+                            status = "成功" if detail.get("success") else "失败"
+                            video_name = detail.get("video_name", "未知视频")
+                            message = detail.get("message", "")
+                            publish_time = detail.get("publish_time", "")
+                            detail_str += f"{video_name}: {status} - {message}"
+                            if publish_time:
+                                detail_str += f" ({publish_time})"
+                            detail_str += "\n"
+                    
+                    # 显示最终统计结果
+                    msg = (f"上传完成！\n\n"
+                          f"总计视频：{total}个\n"
+                          f"成功：{success}个\n"
+                          f"失败：{failed}个\n\n"
+                          f"总耗时：{time_str}"
+                          f"{detail_str}")
+                    
                     QMessageBox.information(self, "完成", msg)
+                    
+                    # 刷新界面显示最新数据
+                    self.init_ui()
                 else:
                     QMessageBox.information(self, "完成", "视频上传完成")
             elif self.thread.model == 2:
@@ -827,9 +860,27 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             i: 行索引
         """
         try:
-            # 直接从数据库重新读取数据并更新界面
-            self.init_ui()
+            # 只更新必要的单元格，而不是刷新整个界面
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT daily_success, daily_failed, last_publish_time 
+                FROM user_data 
+                WHERE appid = ?
+            """, (self.df.iloc[i]["appid"],))
+            result = cursor.fetchone()
             
+            if result:
+                daily_success, daily_failed, last_publish_time = result
+                # 更新DataFrame中的数据
+                self.df.at[i, "daily_success"] = daily_success
+                self.df.at[i, "daily_failed"] = daily_failed
+                self.df.at[i, "last_publish_time"] = last_publish_time
+                
+                # 更新表格中的显示
+                self.tableWidget.setItem(i, 12, QTableWidgetItem(str(daily_success)))
+                self.tableWidget.setItem(i, 13, QTableWidgetItem(str(daily_failed)))
+                self.tableWidget.setItem(i, 14, QTableWidgetItem(str(last_publish_time)))
+                
         except Exception as e:
             logger.error(f"更新表格失败: {str(e)}")
 
@@ -1621,7 +1672,6 @@ def show_key_verification():
                 verify_window.close()
             else:
                 status_label.setText('验证失败')
-                QMessageBox.critical(verify_window, '错误', '密钥验证失败，请检查后重试')
         
         verify_button = QPushButton('验证')
         verify_button.clicked.connect(verify)
