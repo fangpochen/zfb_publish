@@ -1641,10 +1641,17 @@ def process_single_video(args):
             # 如果上传成功且需要删除原视频
             if delete_original and os.path.exists(file_path):
                 try:
+                    # 删除原视频
                     os.remove(file_path)
                     logger.info(f"已删除原视频: {file_path}")
+                    
+                    # 删除生成的封面图片
+                    cover_file = os.path.splitext(file_path)[0] + '.jpg'
+                    if os.path.exists(cover_file):
+                        os.remove(cover_file)
+                        logger.info(f"已删除封面图片: {cover_file}")
                 except Exception as e:
-                    logger.error(f"删除原视频失败: {str(e)}")
+                    logger.error(f"删除文件失败: {str(e)}")
             
             return {
                 "success": True, 
