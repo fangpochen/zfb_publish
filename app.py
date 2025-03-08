@@ -710,23 +710,55 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             print(e)
 
     def set_upload_counts(self):
+        """设置上传总数"""
         try:
+            # 获取选中的行
             data = self.get_check_row()
-            count = self.lineEdit_3.text()
+            count_str = self.lineEdit_3.text()
+            
             try:
-                count = int(count)
+                count = int(count_str)
+                if count < 0:
+                    self.textBrowser.append("上传总数不能为负数")
+                    return
             except ValueError:
                 self.textBrowser.append("请输入有效的整数")
                 return
-            self.df.loc[data, "total_uploads"] = count
-            df = self.df.loc[data]
-            update_existing_fields(df)
-
+                
+            # 更新数据库
+            conn = sqlite3.connect('data.db')
+            cursor = conn.cursor()
+            
+            # 遍历选中的行
+            updated = False
             for i in range(len(data)):
                 if data[i]:
+                    updated = True
+                    appid = self.df.iloc[i]["appid"]
+                    # 更新数据库
+                    cursor.execute('''
+                        UPDATE user_data 
+                        SET total_uploads = ?
+                        WHERE appid = ?
+                    ''', (count, appid))
+                    
+                    # 更新DataFrame
+                    self.df.at[i, "total_uploads"] = count
+                    # 更新界面显示
                     self.tableWidget.setItem(i, 5, QTableWidgetItem(str(count)))
+            
+            conn.commit()
+            conn.close()
+            
+            if updated:
+                logger.info(f"已更新选中账号的上传总数为: {count}")
+                QMessageBox.information(self, "成功", f"已将选中账号的上传总数设置为: {count}")
+            else:
+                QMessageBox.warning(self, "提示", "请先选择要设置的账号")
+            
         except Exception as e:
-            print(e)
+            logger.error(f"设置上传总数失败: {str(e)}")
+            QMessageBox.warning(self, "错误", f"设置上传总数失败: {str(e)}")
 
     def set_tags(self):
         """
@@ -757,6 +789,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         :param stats: 包含任务完成的统计信息的字典
         """
         try:
+            # 停止定时器
+            self.timer_db.stop()
+            
             if self.thread.model == 0:
                 QMessageBox.information(self, "完成", "任务完成")
             elif self.thread.model == 1:
@@ -804,9 +839,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                           f"{detail_str}")
                     
                     QMessageBox.information(self, "完成", msg)
-                    
-                    # 刷新界面显示最新数据
-                    self.init_ui()
                 else:
                     QMessageBox.information(self, "完成", "视频上传完成")
             elif self.thread.model == 2:
@@ -815,10 +847,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 QMessageBox.information(self, "完成", "删除非推荐视频完成")
             elif self.thread.model == 4:
                 QMessageBox.information(self, "完成", "获取子账号完成")
+                # 读取子账号完成后刷新界面
+                self.init_ui()
                 
             # 更新UI状态
             self.update_button()
-            self.init_ui()  # 直接从数据库重新加载数据
             
         except Exception as e:
             logger.error(f"处理完成事件时发生错误: {str(e)}")
@@ -1292,35 +1325,48 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         """检查是否需要重置每日统计"""
         try:
             current_date = datetime.now().date()
-            last_reset_file = '.last_reset_date'
             
-            # 如果没有上次发布记录，直接返回
-            if not os.path.exists(last_reset_file):
-                return
+            # 从数据库读取所有账号
+            conn = sqlite3.connect('data.db')
+            cursor = conn.cursor()
             
-            # 读取上次发布日期
-            with open(last_reset_file, 'r') as f:
-                last_date = datetime.strptime(f.read().strip(), '%Y-%m-%d').date()
+            # 获取所有账号的appid和最后发布时间
+            cursor.execute('''
+                SELECT appid, last_publish_time 
+                FROM user_data
+            ''')
+            accounts = cursor.fetchall()
             
-            # 如果上次发布不是今天，重置统计
-            if last_date != current_date:
-                logger.info("重置每日统计数据")
+            for appid, last_publish_time in accounts:
+                should_reset = False
                 
-                # 直接更新数据库
-                conn = sqlite3.connect('data.db')
-                cursor = conn.cursor()
-                cursor.execute('''
-                    UPDATE user_data 
-                    SET daily_success = 0,
-                        daily_failed = 0
-                ''')
-                conn.commit()
-                conn.close()
+                # 如果没有最后发布时间，或者最后发布时间不是今天，需要重置
+                if not last_publish_time:
+                    should_reset = True
+                else:
+                    try:
+                        last_date = datetime.strptime(last_publish_time.split()[0], '%Y-%m-%d').date()
+                        should_reset = last_date != current_date
+                    except Exception as e:
+                        logger.error(f"解析最后发布时间失败 - appid: {appid}, error: {str(e)}")
+                        should_reset = True
                 
-                # 重新加载数据并更新界面
-                self.init_ui()
-                
-                logger.info("每日统计重置完成")
+                if should_reset:
+                    logger.info(f"重置账号 {appid} 的每日统计数据")
+                    cursor.execute('''
+                        UPDATE user_data 
+                        SET daily_success = 0,
+                            daily_failed = 0
+                        WHERE appid = ?
+                    ''', (appid,))
+            
+            conn.commit()
+            conn.close()
+            
+            # 重新加载数据并更新界面
+            self.init_ui()
+            
+            logger.info("每日统计重置检查完成")
             
         except Exception as e:
             logger.error(f"每日重置检查时出错: {str(e)}")
