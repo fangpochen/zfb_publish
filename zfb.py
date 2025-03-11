@@ -1443,7 +1443,7 @@ def upload_pic(cookies, video_file_path):
         return json.loads(response.text).get('extProperty')
 
 
-def get_video_url(file_id, mt, max_retries=60, retry_interval=10):  # 60次 * 10秒 = 10分钟
+def get_video_url(file_id, mt, max_retries=60, retry_interval=3):  # 60次 * 10秒 = 10分钟
     """
     获取视频URL，10分钟内每10秒重试一次
     """
