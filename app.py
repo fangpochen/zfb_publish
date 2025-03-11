@@ -1307,19 +1307,6 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             logger.error(f"配置Chrome路径失败: {str(e)}")
             QMessageBox.warning(self, "错误", f"配置失败: {str(e)}")
 
-    def handle_upload_complete(self, stats, row_index):
-        """处理单个账号的上传完成统计"""
-        success_count = stats.get("success", 0)
-        failed_count = stats.get("failed", 0)
-        
-        # 更新DataFrame中的统计数据
-        current_success = self.df.at[row_index, "daily_success"] = self.df.at[row_index, "daily_success"] + success_count
-        current_failed = self.df.at[row_index, "daily_failed"] = self.df.at[row_index, "daily_failed"] + failed_count
-        
-        # 更新表格显示
-        current_columns = self.tableWidget.columnCount()
-        self.tableWidget.setItem(row_index, current_columns - 2, QTableWidgetItem(str(current_success)))
-        self.tableWidget.setItem(row_index, current_columns - 1, QTableWidgetItem(str(current_failed)))
 
     def check_daily_reset(self):
         """检查是否需要重置每日统计"""

@@ -16,9 +16,10 @@ from ratelimit import limits, sleep_and_retry
 from DrissionPage import ChromiumPage, ChromiumOptions
 import threading
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import shutil
 from PIL import Image
+import queue
 
 
 # 在文件开头添加线程控制类
@@ -904,261 +905,344 @@ def get_traid():
 
 
 def upload_4m_video(mt, file_path):
+    """
+    上传小于或等于4MB的视频文件
+    
+    参数:
+    - mt: 上传令牌
+    - file_path: 文件路径
+    
+    返回:
+    - file_id和file_name的元组 (与upload_large_video保持一致的返回格式)
+    """
     try:
         # 获取文件大小（字节数）
         file_size = os.path.getsize(file_path)
+        file_name = os.path.basename(file_path)
 
-        # 4MB = 4 * 1024 * 1024 字节
-        max_size = 4 * 1024 * 1024  # 4MB
+        # 设置重试次数
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # 打开文件
+                with open(file_path, 'rb') as file:
+                    files = {
+                        'file': (file.name, file, 'video/mp4')
+                    }
 
-        if file_size > max_size:
-            return upload_large_video(mt, file_path, file_size)
-            
-        # 打开文件
-        with open(file_path, 'rb') as file:
-            files = {
-                'file': (file.name, file, 'video/mp4')
-            }
+                    headers = {
+                        'Accept': '*/*',
+                        'Accept-Language': 'zh-CN,zh;q=0.9',
+                        'content-length': str(file_size),
+                        'Origin': 'https://c.alipay.com',
+                        'Referer': 'https://c.alipay.com/',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                        'X-Mass-Appkey': 'apwallet',
+                        'X-Mass-Biztype': 'content_lifetab',
+                        'X-Mass-Cust-Conf': '{"extern":{"isWaterMark":true}}',
+                        'X-Mass-Token': mt,
+                        'Connection': 'keep-alive'
+                    }
+                    params = {
+                        'mt': mt,
+                        'bz': 'content_lifetab',
+                        'public': 'false',
+                    }
 
-            headers = {
-            'Accept': '*/*',
-            'Accept-Language': 'zh-CN,zh;q=0.9',
-            'content-length':str(file_size),
-            'Origin': 'https://c.alipay.com',
-            'Referer': 'https://c.alipay.com/',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'X-Mass-Appkey': 'apwallet',
-            'X-Mass-Biztype': 'content_lifetab',
-            'X-Mass-Cust-Conf': '{"extern":{"isWaterMark":true}}',
-            'X-Mass-Token': mt,
-            'Connection': 'keep-alive'
-        }
-            params = {
-            'mt': mt,
-            'bz': 'content_lifetab',
-            'public': 'false',
-            }
-
-            # url = f'https://mass.alipay.com/file/auth/upload?mt={mt}&bz=content_lifetab&public=false'
-            response = requests.post('https://mass.alipay.com/file/auth/upload', params=params, headers=headers, files=files)
-            logger.info(f'upload_4m_video response: {response.text}')
-            logger.info(f'upload_4m_video response code: {response}')
-            file_id = json.loads(response.text).get('data', {}).get('id')
-            
-            if not file_id:
-                raise Exception("Failed to get file_id from response")
+                    response = requests.post(
+                        'https://mass.alipay.com/file/auth/upload', 
+                        params=params, 
+                        headers=headers, 
+                        files=files,
+                        timeout=(15, 120)  # (连接超时, 读取超时)
+                    )
+                    
+                    # 记录详细的响应信息，包括状态码
+                    logger.info(f'upload_4m_video 状态码: {response.status_code}, 响应内容: {response.text}')
+                    
+                    # 检查HTTP状态码
+                    if response.status_code != 200:
+                        error_msg = f"视频上传失败 - HTTP错误: {response.status_code}"
+                        if response.text:
+                            error_msg += f", 响应内容: {response.text}"
+                        
+                        if response.status_code == 403:
+                            error_msg += " (权限被拒绝，可能需要重新获取mt令牌)"
+                            # 403错误重试可能没有意义，抛出特定异常
+                            raise Exception(error_msg)
+                        else:
+                            # 其他状态码可能是临时问题，可以重试
+                            raise requests.exceptions.HTTPError(error_msg)
+                            
+                    # 检查响应内容是否为空
+                    if not response.text:
+                        raise Exception("服务器返回空响应")
+                        
+                    # 尝试解析JSON
+                    try:
+                        json_data = json.loads(response.text)
+                    except json.JSONDecodeError as e:
+                        raise Exception(f"JSON解析错误: {str(e)}, 原始响应: {response.text}")
+                        
+                    # 检查是否存在data字段
+                    file_id = json_data.get('data', {}).get('id')
+                    if not file_id:
+                        raise Exception(f"响应中未找到file_id: {response.text}")
+                        
+                    logger.info(f"视频上传成功 - {file_name}, file_id: {file_id}")
+                    # 返回一个元组，与upload_large_video保持一致
+                    return file_id, file_name
+                    
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                # 网络连接问题或超时，适合重试
+                retry_count += 1
+                logger.warning(f"网络错误(尝试 {retry_count}/{max_retries}) - {str(e)}")
+                if retry_count >= max_retries:
+                    raise Exception(f"视频上传失败(网络错误): {str(e)}")
+                time.sleep(2 * retry_count)  # 递增等待时间
                 
-            return file_id, file.name
+            except requests.exceptions.HTTPError as e:
+                # HTTP错误，可能是临时性问题
+                retry_count += 1
+                logger.warning(f"HTTP错误(尝试 {retry_count}/{max_retries}) - {str(e)}")
+                if retry_count >= max_retries:
+                    raise Exception(f"视频上传失败(HTTP错误): {str(e)}")
+                time.sleep(2 * retry_count)
+                
+            except json.JSONDecodeError as e:
+                # JSON解析错误
+                retry_count += 1
+                logger.warning(f"JSON解析错误(尝试 {retry_count}/{max_retries}) - {str(e)}")
+                if retry_count >= max_retries:
+                    raise Exception(f"视频上传失败(JSON解析错误): {str(e)}")
+                time.sleep(2 * retry_count)
+                
+            except Exception as e:
+                # 其他未预期的错误
+                retry_count += 1
+                logger.error(f"上传错误(尝试 {retry_count}/{max_retries}) - {str(e)}")
+                if retry_count >= max_retries:
+                    raise Exception(f"视频上传失败: {str(e)}")
+                time.sleep(2 * retry_count)
+                
+        # 不应该到达这里，但为了安全
+        raise Exception("视频上传失败: 未知错误")
             
     except Exception as e:
-        logger.info(f"视频上传失败 : {str(e)}")
-
+        logger.error(f"视频上传失败 - {file_path}: {str(e)}")
+        # 确保抛出异常，而不是返回None
+        raise Exception(f"视频上传失败: {str(e)}")
 
 
 def upload_large_video(mt, file_path, file_size):
-    # 打开文件
-    max_retries = 3  # 最大重试次数
+    """
+    分块上传大文件，通过并行上传分块来最大化利用上行带宽
+    
+    参数:
+    - mt: 上传令牌
+    - file_path: 文件路径
+    - file_size: 文件大小(字节)
+    
+    返回:
+    - file_id: 文件ID (字符串或(file_id, file_name)的元组)
+    - file_name: 文件名
+    """
+    file_name = os.path.basename(file_path)
+    logger.info(f"开始分块上传大文件 - {file_name}, 大小: {file_size/1024/1024:.2f}MB")
+    
+    # 最大重试次数
+    max_retries = 3  
     retry_count = 0
     
     while retry_count < max_retries:
         try:
+            # 1. 计算文件MD5 - 使用with语句确保文件正确关闭
+            file_md5 = ""
+            with open(file_path, 'rb') as f:
+                file_md5 = calculate_file_md5(f)
+            
+            # 2. 初始化上传 - 获取file_id
+            headers = {
+                'accept': 'application/json, text/plain, */*',
+                'accept-language': 'zh-CN,zh;q=0.9',
+                'origin': 'https://c.alipay.com',
+                'priority': 'u=1, i',
+                'referer': 'https://c.alipay.com/',
+                'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-site',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'x-mass-appkey': 'apwallet',
+                'x-mass-biztype': 'content_lifetab',
+                'x-mass-cust-conf': '{"extern":{"isWaterMark":true}}',
+                'x-mass-file-length': str(file_size),
+                'x-mass-file-md5': file_md5,
+                'x-mass-file-multipart-slice-size': '4194304',  # 4MB
+                'x-mass-filename': urllib.parse.quote(file_name),
+                'x-mass-public': 'false',
+                'x-mass-token': mt,
+                'x-mass-traceid': get_traid(),
+            }
+
+            # 打印请求参数
+            # logger.info("初始化上传请求参数:")
+            # logger.info(f"URL: https://mass.alipay.com/file/multipart/upload/claim")
+            # logger.info(f"Headers: {json.dumps(headers, indent=2, ensure_ascii=False)}")
+            # logger.info(f"文件信息:")
+            # logger.info(f"  - 文件名: {file_name}")
+            # logger.info(f"  - 文件大小: {human_readable_size(file_size)}")
+            # logger.info(f"  - 文件MD5: {file_md5}")
+            # logger.info(f"  - MT令牌: {mt}")
+
+            # 初始化上传请求
+            response = requests.post('https://mass.alipay.com/file/multipart/upload/claim', headers=headers)
+            
+            # 打印完整响应内容
+            logger.info("初始化上传响应:")
+            logger.info(f"状态码: {response.status_code}")
+            logger.info(f"响应头: {json.dumps(dict(response.headers), indent=2, ensure_ascii=False)}")
+            try:
+                response_json = response.json()
+                logger.info(f"响应内容: {json.dumps(response_json, indent=2, ensure_ascii=False)}")
+            except:
+                logger.info(f"响应内容: {response.text}")
+            
+            # 检查状态码
+            if response.status_code != 200:
+                error_msg = f"初始化上传失败 - HTTP错误: {response.status_code}"
+                if response.text:
+                    error_msg += f", 响应内容: {response.text}"
+                
+                # 对403错误进行特殊处理
+                if response.status_code == 403:
+                    error_msg += " (权限被拒绝，可能需要重新获取mt令牌)"
+                    # 403错误重试可能没有意义，直接抛出异常
+                    raise Exception(error_msg)
+                else:
+                    # 其他状态码可能是临时问题，可以重试
+                    raise Exception(error_msg)
+            
+            # 尝试解析JSON
+            try:
+                json_data = json.loads(response.text)
+            except json.JSONDecodeError as e:
+                raise Exception(f"JSON解析错误: {str(e)}, 原始响应: {response.text}")
+                
+            # 获取file_id
+            if not json_data.get('data') or not json_data['data'].get('fileId'):
+                raise Exception(f"响应中未找到file_id: {response.text}")
+                
+            file_id = json_data['data']['fileId']
+            logger.info(f"初始化上传成功，获取到file_id: {file_id}")
+            
+            # 3. 处理分块上传 - 使用文件流式读取避免全部加载到内存
+            failed_chunks = []  # 记录失败的分块
+            from threading import Lock
+            
+            # 创建线程安全的计数器
+            counter_lock = Lock()
+            successful_uploads = 0
+            failed_uploads = 0
+            
             with open(file_path, 'rb') as file:
-                # 构建文件数据
-                headers = {
-                    'accept': 'application/json, text/plain, */*',
-                    'accept-language': 'zh-CN,zh;q=0.9',
-                    'origin': 'https://c.alipay.com',
-                    'priority': 'u=1, i',
-                    'referer': 'https://c.alipay.com/',
-                    'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-                    'sec-ch-ua-mobile': '?0',
-                    'sec-ch-ua-platform': '"Windows"',
-                    'sec-fetch-dest': 'empty',
-                    'sec-fetch-mode': 'cors',
-                    'sec-fetch-site': 'same-site',
-                    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                    'x-mass-appkey': 'apwallet',
-                    'x-mass-biztype': 'content_lifetab',
-                    'x-mass-cust-conf': '{"extern":{"isWaterMark":true}}',
-                    'x-mass-file-length': str(file_size),
-                    'x-mass-file-md5': calculate_file_md5(file),
-                    'x-mass-file-multipart-slice-size': '4194304',
-                    'x-mass-filename': urllib.parse.quote(file.name),
-                    'x-mass-public': 'false',
-                    'x-mass-token': mt,
-                    'x-mass-traceid': get_traid(),
-                }
-
-                response = requests.post('https://mass.alipay.com/file/multipart/upload/claim', headers=headers)
+                # 分块大小: 4MB
+                chunk_size = 4 * 1024 * 1024
                 
-                # 详细的错误日志
-                logger.info(f"初始化上传响应: {response.text}")
-                logger.info(f"请求头: {headers}")
+                # 计算分块数量
+                num_chunks = (file_size // chunk_size) + (1 if file_size % chunk_size else 0)
+                logger.info(f"文件将被分为 {num_chunks} 个块上传")
                 
-                if response.status_code != 200:
-                    logger.error(f"初始化上传失败，状态码: {response.status_code}")
-                    logger.error(f"响应内容: {response.text}")
-                    retry_count += 1
-                    if retry_count == max_retries:
-                        raise Exception(f"初始化上传失败: {response.status_code} - {response.text}")
-                    time.sleep(2)  # 等待2秒后重试
-                    continue
-                    
-                file_id = json.loads(response.text).get('data').get('fileId')
-
-            def upload_part(args):
-                """上传单个分块的函数"""
-                max_retries = 1  # 只重试一次
-                retry_count = 0
+                # 并行上传分块 - 适当限制并发数
+                max_workers = min(10, int(num_chunks))  # 最多10个线程
                 
-                while retry_count <= max_retries:
-                    try:
-                        part_num, part_data, start_pos = args
-                        headers = {
-                            'accept': 'application/json, text/plain, */*',
-                            'accept-language': 'zh-CN,zh;q=0.9',
-                            'origin': 'https://c.alipay.com',
-                            'referer': 'https://c.alipay.com/',
-                            'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-                            'sec-ch-ua-mobile': '?0',
-                            'sec-ch-ua-platform': '"Windows"',
-                            'sec-fetch-dest': 'empty',
-                            'sec-fetch-mode': 'cors',
-                            'sec-fetch-site': 'same-site',
-                            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                            'x-mass-appkey': 'apwallet',
-                            'x-mass-biztype': 'content_lifetab',
-                            'x-mass-file-multipart-id': file_id,
-                            'x-mass-file-multipart-length': str(len(part_data)),
-                            'x-mass-file-multipart-num': str(part_num),
-                            'x-mass-file-multipart-start': str(start_pos),
-                            'x-mass-token': mt,
-                            'x-mass-traceid': get_traid()
-                        }
-
-                        files = {
-                            'file': ('blob', part_data, 'application/octet-stream'),
-                        }
-
-                        session = requests.Session()
-                        adapter = requests.adapters.HTTPAdapter(max_retries=1)
-                        session.mount('https://', adapter)
-                        
-                        try:
-                            response = session.post(
-                                'https://mass.alipay.com/file/multipart/upload/part',
-                                headers=headers,
-                                files=files,
-                                timeout=(30, 300),  # (连接超时, 读取超时)
-                                verify=True
-                            )
-                            
-                            if response.status_code != 200:
-                                logger.error(f"分块 {part_num} 上传失败，状态码: {response.status_code}")
-                                logger.error(f"响应内容: {response.text}")
-                                raise Exception(f"分块上传失败: {response.status_code} - {response.text}")
-                                
-                            logger.info(f"分块 {part_num} 上传完成，大小: {len(part_data)}")
-                            return response.json()
-                            
-                        finally:
-                            session.close()
-                            
-                    except Exception as e:
-                        logger.error(f"分块 {part_num} 上传失败: {str(e)}")
-                        if retry_count < max_retries:
-                            retry_count += 1
-                            time.sleep(5)  # 简单等待5秒后重试
-                            continue
-                        raise  # 重试次数用完，抛出异常
-                        
-                raise Exception(f"分块 {part_num} 上传失败，已达到最大重试次数")
-
-            with open(file_path, 'rb') as file:
-                # 设置分割后的最大文件大小
-                max_size = 4 * 1024 * 1024  # 4MB
-                # 计算文件的分块数
-                num_parts = (file_size // max_size) + (1 if file_size % max_size else 0)
-                
-                # 准备所有分块的数据
-                upload_args = []
-                for i in range(num_parts):
-                    part_data = file.read(max_size)
-                    if not part_data:
-                        break
-                    upload_args.append((i + 1, part_data, i * max_size))
-
-                # 使用线程池并行上传分块
-                max_workers = min(10, num_parts)  # 最多10个线程
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = []
-                    for args in upload_args:
-                        future = executor.submit(upload_part, args)
-                        futures.append(future)
-
-                    # 等待所有分块上传完成
-                    for future in concurrent.futures.as_completed(futures):
+                    
+                    # 逐块读取和提交上传任务，避免一次性加载所有数据到内存
+                    for chunk_number in range(1, int(num_chunks) + 1):
+                        # 读取当前分块
+                        chunk_data = file.read(chunk_size)
+                        if not chunk_data:
+                            break
+                            
+                        # 计算开始位置
+                        start_pos = (chunk_number - 1) * chunk_size
+                        
+                        # 直接提交上传任务
+                        future = executor.submit(
+                            _upload_chunk, 
+                            mt=mt, 
+                            file_id=file_id, 
+                            chunk_number=chunk_number, 
+                            chunk_data=chunk_data,  # 传递当前读取的数据
+                            start_pos=start_pos,
+                            total_chunks=num_chunks
+                        )
+                        futures.append((future, chunk_number))
+                    
+                    # 处理所有上传结果
+                    for future, chunk_number in futures:
                         try:
-                            future.result()  # 检查是否有异常
+                            result = future.result()
+                            with counter_lock:  # 使用锁保护计数器更新
+                                if result:
+                                    successful_uploads += 1
+                                    logger.info(f"分块 {chunk_number}/{num_chunks} 上传成功")
+                                else:
+                                    failed_uploads += 1
+                                    logger.error(f"分块 {chunk_number}/{num_chunks} 上传失败")
+                                    failed_chunks.append(chunk_number)
                         except Exception as e:
-                            logger.error(f"分块上传失败: {str(e)}")
-                            raise  # 重新抛出异常
+                            with counter_lock:  # 使用锁保护计数器更新
+                                failed_uploads += 1
+                            logger.error(f"分块 {chunk_number}/{num_chunks} 上传异常: {str(e)}")
+                            failed_chunks.append(chunk_number)
+                
+                # 如果有失败的分块，则抛出异常并重试整个上传过程
+                if failed_chunks:
+                    raise Exception(f"有 {len(failed_chunks)} 个分块上传失败: {failed_chunks}")
+                
+                # 4. 完成上传
+                logger.info(f"所有分块上传完成，开始调用upload complete - file_id: {file_id}")
+                try:
+                    # 调用upload_complete函数，确保返回的file_id格式正确
+                    upload_complete(mt, file_id=file_id)
+                    logger.info(f"完成上传成功 - file_id: {file_id}")
+                    return file_id, file_name
 
-            # 完成上传
-            upload_complete(mt, file_id)
-            return file_id, file.name
+                except Exception as e:
+                    logger.error(f"完成上传失败 - 错误: {str(e)}")
+                    raise Exception(f"完成上传失败: {str(e)}")
+                
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            # 网络连接问题或超时，适合重试
+            retry_count += 1
+            logger.warning(f"网络错误(尝试 {retry_count}/{max_retries}) - {str(e)}")
+            if retry_count >= max_retries:
+                logger.error(f"达到最大重试次数，放弃上传 - {file_name}")
+                raise Exception(f"视频上传失败(网络错误): {str(e)}")
+            
+            # 等待后重试
+            time.sleep(3)
             
         except Exception as e:
-            logger.error(f"上传过程发生错误: {str(e)}")
+            # 其他错误
             retry_count += 1
-            if retry_count == max_retries:
-                raise
-            time.sleep(2)
-            continue
-
-def upload_part(args):
-    """上传单个分片，带有重试机制"""
-    mt = args['mt']
-    file_id = args['file_id']
-    chunk_number = args['chunk_number']
-    chunk_data = args['chunk_data']
-    total_chunks = args['total_chunks']
+            logger.error(f"大文件上传失败(尝试 {retry_count}/{max_retries}) - {str(e)}")
+            if retry_count >= max_retries:
+                logger.error(f"达到最大重试次数，放弃上传 - {file_name}")
+                raise Exception(f"视频上传失败: {str(e)}")
+            
+            # 等待后重试
+            time.sleep(3)
     
-    max_retries = 3
-    retry_count = 0
-    
-    while retry_count < max_retries:
-        try:
-            response = requests.post(
-                'https://mass.alipay.com/file/multipart/upload/part',
-                headers={
-                    'x-upload-mt': mt,
-                    'x-upload-file-id': file_id,
-                    'x-upload-chunk-number': str(chunk_number),
-                    'x-upload-chunk-total': str(total_chunks)
-                },
-                data=chunk_data,
-                timeout=30  # 设置30秒超时
-            )
-            response.raise_for_status()
-            return True
-            
-        except (requests.exceptions.SSLError, 
-                requests.exceptions.ProxyError,
-                requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout) as e:
-            retry_count += 1
-            logger.warning(f"分片{chunk_number}上传失败，正在重试({retry_count}/{max_retries}): {str(e)}")
-            if retry_count == max_retries:
-                logger.error(f"分片{chunk_number}上传失败，已达到最大重试次数: {str(e)}")
-                return False
-            time.sleep(2)  # 等待2秒后重试
-            
-        except Exception as e:
-            logger.error(f"分片{chunk_number}上传时发生未知错误: {str(e)}")
-            return False
-            
-    return False
+    # 不应该到达这里，但为了安全
+    raise Exception(f"视频上传失败: 未知错误")
 
 
 def upload_complete(mt, file_id):
@@ -1185,9 +1269,148 @@ def upload_complete(mt, file_id):
     response = requests.post('https://mass.alipay.com/file/multipart/upload/complete', headers=headers)
     logger.info(response.json())
 
+def _upload_chunk(mt, file_id, chunk_number, chunk_data, start_pos, total_chunks):
+    """
+    上传单个分块
+    
+    参数:
+    - mt: 上传令牌
+    - file_id: 文件ID
+    - chunk_number: 分块序号
+    - chunk_data: 分块数据
+    - start_pos: 分块起始位置
+    - total_chunks: 总分块数
+    
+    返回:
+    - True: 上传成功
+    - False: 上传失败
+    """
+    max_retries = 2  # 分块上传重试次数
+    retry_count = 0
+    
+    while retry_count <= max_retries:
+        try:
+            # 构建请求头
+            headers = {
+                'accept': 'application/json, text/plain, */*',
+                'accept-language': 'zh-CN,zh;q=0.9',
+                'origin': 'https://c.alipay.com',
+                'referer': 'https://c.alipay.com/',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'x-mass-appkey': 'apwallet',
+                'x-mass-biztype': 'content_lifetab',
+                'x-mass-file-multipart-id': file_id,
+                'x-mass-file-multipart-length': str(len(chunk_data)),
+                'x-mass-file-multipart-num': str(chunk_number),
+                'x-mass-file-multipart-start': str(start_pos),
+                'x-mass-token': mt,
+                'x-mass-traceid': get_traid()
+            }
+            
+            # 打印分块上传请求参数
+            logger.info(f"\n分块 {chunk_number}/{total_chunks} 上传请求:")
+            logger.info(f"URL: https://mass.alipay.com/file/multipart/upload/part")
+            logger.info(f"Headers: {json.dumps(headers, indent=2, ensure_ascii=False)}")
+            logger.info(f"分块信息:")
+            logger.info(f"  - 文件ID: {file_id}")
+            logger.info(f"  - 分块大小: {human_readable_size(len(chunk_data))}")
+            logger.info(f"  - 起始位置: {start_pos}")
+            logger.info(f"  - MT令牌: {mt}")
+            
+            # 上传分块
+            files = {
+                'file': ('blob', chunk_data, 'application/octet-stream'),
+            }
+            
+            # 使用会话以支持重试
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(max_retries=1)
+            session.mount('https://', adapter)
+            
+            # 发送请求，设置适当的超时
+            try:
+                response = session.post(
+                    'https://mass.alipay.com/file/multipart/upload/part', 
+                    headers=headers, 
+                    files=files, 
+                    timeout=(15, 120)  # (连接超时, 读取超时)
+                )
+                
+                # 打印完整响应内容
+                logger.info(f"\n分块 {chunk_number}/{total_chunks} 上传响应:")
+                logger.info(f"状态码: {response.status_code}")
+                logger.info(f"响应头: {json.dumps(dict(response.headers), indent=2, ensure_ascii=False)}")
+                try:
+                    response_json = response.json()
+                    logger.info(f"响应内容: {json.dumps(response_json, indent=2, ensure_ascii=False)}")
+                except:
+                    logger.info(f"响应内容: {response.text}")
+                
+            finally:
+                # 确保会话被关闭
+                session.close()
+            
+            # 检查响应
+            if response.status_code == 403:
+                # 403错误特殊处理，权限问题，重试意义不大
+                logger.error(f"分块 {chunk_number}/{total_chunks} 上传被拒绝(403)")
+                return False
+            elif response.status_code != 200:
+                # 其他HTTP错误，可以重试
+                raise requests.exceptions.HTTPError(
+                    f"HTTP错误({response.status_code}): {response.text}"
+                )
+                
+            # 解析JSON响应
+            try:
+                json_data = response.json()
+                if json_data.get('success') is not True:
+                    error_msg = f"服务器返回失败: {json_data}"
+                    if 'data' in json_data and 'missingParts' in json_data['data']:
+                        error_msg += f", 缺失分块: {json_data['data']['missingParts']}"
+                    raise Exception(error_msg)
+                    
+                # 上传成功
+                return True
+            except json.JSONDecodeError as e:
+                raise Exception(f"解析响应JSON失败: {str(e)}")
+                
+        except requests.exceptions.ConnectionError as e:
+            # 网络连接问题，适合重试
+            retry_count += 1
+            logger.warning(f"分块 {chunk_number}/{total_chunks} - 连接错误(尝试 {retry_count}/{max_retries}): {str(e)}")
+            
+        except requests.exceptions.Timeout as e:
+            # 超时问题，适合重试
+            retry_count += 1
+            logger.warning(f"分块 {chunk_number}/{total_chunks} - 请求超时(尝试 {retry_count}/{max_retries}): {str(e)}")
+            
+        except requests.exceptions.HTTPError as e:
+            # HTTP错误，视状态码决定是否重试
+            retry_count += 1
+            logger.warning(f"分块 {chunk_number}/{total_chunks} - HTTP错误(尝试 {retry_count}/{max_retries}): {str(e)}")
+            
+        except Exception as e:
+            # 其他未预期的错误
+            retry_count += 1
+            logger.error(f"分块 {chunk_number}/{total_chunks} - 未知错误(尝试 {retry_count}/{max_retries}): {str(e)}")
+        
+        # 判断是否达到最大重试次数
+        if retry_count > max_retries:
+            logger.error(f"分块 {chunk_number}/{total_chunks} - 达到最大重试次数")
+            return False
+            
+        # 等待后重试，使用递增的等待时间
+        wait_time = 2 * retry_count
+        logger.info(f"分块 {chunk_number}/{total_chunks} - 等待 {wait_time} 秒后重试")
+        time.sleep(wait_time)
+    
+    # 不应该到达这里，但为了安全
+    return False
+
 
 def upload_pic(cookies, video_file_path):
-    # 将视频文件路径的扩展名��为.jpg
+    # 将视频文件路径的扩展名为.jpg
     pic_path = os.path.splitext(video_file_path)[0] + '.jpg'
 
     headers = {
@@ -1241,27 +1464,56 @@ def get_video_url(file_id, mt, max_retries=60, retry_interval=10):  # 60次 * 10
 
     for attempt in range(max_retries):
         try:
-            response = requests.get(
-                f'https://mmtcapi.alipay.com/video/2.0/convert/query?fileId={file_id}&mt={mt}&bizKey=content_lifetab',
-                headers=headers,
-            )
-            data = json.loads(response.text).get('data', {})
-            trans_code = data.get('transCode', {})
-            convert_results = trans_code.get('convertResults', [])
+            # 构建请求URL
+            url = f'https://mmtcapi.alipay.com/video/2.0/convert/query?fileId={file_id}&mt={mt}&bizKey=content_lifetab'
+            
+            # 打印请求参数
+            logger.info(f"\n获取视频URL - 第{attempt + 1}次尝试:")
+            logger.info(f"URL: {url}")
+            logger.info(f"Headers: {json.dumps(headers, indent=2, ensure_ascii=False)}")
+            logger.info(f"参数信息:")
+            logger.info(f"  - 文件ID: {file_id}")
+            logger.info(f"  - MT令牌: {mt}")
+            
+            # 发送请求
+            response = requests.get(url, headers=headers)
+            
+            # 打印响应内容
+            logger.info(f"\n获取视频URL响应 - 第{attempt + 1}次尝试:")
+            logger.info(f"状态码: {response.status_code}")
+            logger.info(f"响应头: {json.dumps(dict(response.headers), indent=2, ensure_ascii=False)}")
+            
+            try:
+                response_json = json.loads(response.text)
+                logger.info(f"响应内容: {json.dumps(response_json, indent=2, ensure_ascii=False)}")
+                
+                data = response_json.get('data', {})
+                trans_code = data.get('transCode', {})
+                convert_results = trans_code.get('convertResults', [])
 
-            if convert_results and convert_results[0].get('url'):
-                return convert_results[0].get('url')
+                if convert_results and convert_results[0].get('url'):
+                    video_url = convert_results[0].get('url')
+                    logger.info(f"成功获取到视频URL: {video_url}")
+                    return video_url
+                else:
+                    logger.info("未获取到视频URL，等待重试...")
+            except json.JSONDecodeError as e:
+                logger.error(f"解析响应JSON失败: {str(e)}")
+                logger.info(f"原始响应内容: {response.text}")
 
+            if attempt < max_retries - 1:
+                logger.info(f"等待 {retry_interval} 秒后重试...")
             time.sleep(retry_interval)
 
         except Exception as e:
             logger.error(f'获取视频URL失败: {str(e)}')
             if attempt < max_retries - 1:
+                logger.info(f"等待 {retry_interval} 秒后重试...")
                 time.sleep(retry_interval)
             else:
-                raise Exception(f"获取视频URL失败，已超过10分钟重试时间")
+                raise Exception(f"获取视频URL失败，已重试{max_retries}次: {str(e)}")
 
-    raise Exception(f"获取视频URL失败，已超过10分钟重试时间")
+    raise Exception(f"获取视频URL失败，已达到最大重试次数({max_retries}次)")
 
 def format_time_string(time_str):
     # 解析时间字符串
@@ -1270,23 +1522,41 @@ def format_time_string(time_str):
     formatted_time = dt.strftime('%Y-%m-%d %H:%M')
     return formatted_time
 
-def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies, topic_info=None):
+def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None, extProperty=None, mt=None,
+          scheduleTime=None, title=None, cookies=None, topic_info=None):
     """
     发布视频
-    Args:
-        loginPublicId: 账号ID
-        videoId: 视频ID
+    
+    参数:
+        loginPublicId: 登录用户ID
+        videoId: 视频ID（可能是字符串或元组）
         videoFile: 视频文件URL
         videoFileName: 视频文件名
         extProperty: 封面图属性
-        mt: 上传token
+        mt: 上传令牌
         scheduleTime: 定时发布时间
         title: 视频标题
-        cookies: cookies
-        topic_info: 话题信息
-    Returns:
-        发布结果
+        cookies: Cookie
+        topic_info: 话题信息，格式为 [[名称,权重], ...]
+        
+    返回:
+        字典，包含发布结果
     """
+    # 最大重试次数和等待时间
+    max_retries = 5
+    retry_intervals = [5, 10, 15, 30, 60]  # 重试等待时间逐渐增加
+    
+    # 检查并处理videoId，可能是元组形式
+    original_video_id = videoId
+    if isinstance(videoId, tuple) and len(videoId) > 0:
+        videoId = videoId[0]
+        logger.info(f"videoId是元组，提取第一个元素: {videoId}, 原始值: {original_video_id}")
+        
+    # 处理title参数
+    if title is None or title == "":
+        title = "无标题视频"
+        logger.warning(f"未指定标题，使用默认标题: {title}")
+    
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9',
@@ -1303,10 +1573,12 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, s
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     }
 
+    # 添加params参数
     params = {
         'loginPublicId': loginPublicId,
     }
 
+    # 修改请求体结构
     json_data = {
         'loginPublicId': loginPublicId,
         'sourceId': 'sweb',
@@ -1324,26 +1596,26 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, s
         'contentType': 2,
         'imageList': [
             {
-                'djangoId': extProperty.get('djangoId'),
-                'imageUrl': extProperty.get('filePath'),
-                'width': extProperty.get('width'),
-                'height': extProperty.get('height'),
+                'djangoId': extProperty.get('djangoId') if extProperty else None,
+                'imageUrl': extProperty.get('filePath') if extProperty else None,
+                'width': extProperty.get('width') if extProperty else None,
+                'height': extProperty.get('height') if extProperty else None,
                 'type': 'cover_static',
                 'index': 0,
             },
             {
-                'djangoId': extProperty.get('djangoId'),
-                'imageUrl': extProperty.get('filePath'),
-                'width': extProperty.get('width'),
-                'height': extProperty.get('height'),
+                'djangoId': extProperty.get('djangoId') if extProperty else None,
+                'imageUrl': extProperty.get('filePath') if extProperty else None,
+                'width': extProperty.get('width') if extProperty else None,
+                'height': extProperty.get('height') if extProperty else None,
                 'type': 'cover_vertical_static',
                 'index': 1,
             },
             {
-                'djangoId': extProperty.get('djangoId'),
-                'imageUrl': extProperty.get('filePath'),
-                'width': extProperty.get('width'),
-                'height': extProperty.get('height'),
+                'djangoId': extProperty.get('djangoId') if extProperty else None,
+                'imageUrl': extProperty.get('filePath') if extProperty else None,
+                'width': extProperty.get('width') if extProperty else None,
+                'height': extProperty.get('height') if extProperty else None,
                 'type': 'message_cover',
                 'index': 2,
             },
@@ -1363,33 +1635,136 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, s
     # 只有当 scheduleTime 有值时才添加到 json_data
     if scheduleTime:
         json_data['scheduleTime'] = format_time_string(scheduleTime)
-        
-    response = requests.post(
-        'https://contentweb.alipay.com/life/publishShortVideo.json',
-        params=params,
-        cookies=cookies,
-        headers=headers,
-        json=json_data,
-    )
+
+    # 创建会话以支持正确的Cookie处理
+    session = requests.Session()
     
-    response_data = json.loads(response.text)
-    logger.info(f'发布响应: {response.text}')
+    if cookies:
+        # 如果cookies是字典，直接使用
+        if isinstance(cookies, dict):
+            for key, value in cookies.items():
+                session.cookies.set(key, value)
+        # 如果cookies是RequestsCookieJar，也直接使用
+        elif isinstance(cookies, requests.cookies.RequestsCookieJar):
+            session.cookies.update(cookies)
+        # 如果cookies是字符串，尝试解析JSON
+        elif isinstance(cookies, str):
+            try:
+                cookies_dict = json.loads(cookies)
+                for key, value in cookies_dict.items():
+                    session.cookies.set(key, value)
+            except json.JSONDecodeError:
+                logger.error(f"无法解析cookies字符串: {cookies}")
+                return {"success": False, "error": "无效的cookies格式"}
     
-    # 检查发布状态
-    if response_data.get('stat') == 'failed':
-        error_message = response_data.get('errorMessage', '未知错误')
-        error_code = response_data.get('errorCode', 'unknown')
-        logger.error(f'发布失败 - 错误码: {error_code}, 错误信息: {error_message}')
-        raise Exception(f'发布失败: {error_message}')
-        
-    return response_data
+    # 重试机制
+    for retry in range(max_retries):
+        try:
+            logger.info(f"发布视频尝试 {retry+1}/{max_retries}")
+            
+            # 打印请求参数
+            logger.info("发布视频请求参数:")
+            logger.info(f"URL: https://contentweb.alipay.com/life/publishShortVideo.json")
+            logger.info(f"Params: {json.dumps(params, indent=2, ensure_ascii=False)}")
+            logger.info(f"Headers: {json.dumps(headers, indent=2, ensure_ascii=False)}")
+            logger.info(f"JSON数据: {json.dumps(json_data, indent=2, ensure_ascii=False)}")
+            
+            # 使用会话发送请求
+            response = session.post(
+                'https://contentweb.alipay.com/life/publishShortVideo.json',
+                params=params,
+                headers=headers,
+                json=json_data,
+                timeout=30  # 设置30秒超时
+            )
+            
+            # 打印响应信息
+            logger.info(f"发布响应状态码: {response.status_code}")
+            logger.info(f"发布响应头: {json.dumps(dict(response.headers), indent=2, ensure_ascii=False)}")
+            logger.info(f"发布响应内容: {response.text}")
+            
+            # 检查HTTP状态码
+            if response.status_code != 200:
+                error_msg = f"发布失败 - HTTP错误: {response.status_code}"
+                
+                # 特殊处理状态码502（服务器忙）
+                if response.status_code == 502:
+                    logger.warning(f"服务器忙(502)，将在 {retry_intervals[retry]} 秒后重试")
+                    time.sleep(retry_intervals[retry])
+                    continue
+                    
+                # 对其他错误直接返回失败结果
+                return {"success": False, "error": error_msg}
+            
+            # 解析JSON响应
+            try:
+                result = response.json()
+            except json.JSONDecodeError as e:
+                logger.error(f"解析响应JSON失败: {str(e)}, 响应: {response.text}")
+                # 判断是否需要重试
+                if retry < max_retries - 1:
+                    logger.warning(f"将在 {retry_intervals[retry]} 秒后重试")
+                    time.sleep(retry_intervals[retry])
+                    continue
+                return {"success": False, "error": f"解析发布响应失败: {str(e)}"}
+            
+            # 处理结果
+            stat = result.get('stat')
+            
+            if stat == 'ok':
+                # 直接使用result字符串作为发布ID
+                publish_id = result.get('result')
+                logger.info(f"发布成功，publish_id: {publish_id}")
+                return {"success": True, "publish_id": publish_id}
+            else:
+                error_msg = result.get('message', '未知错误')
+                
+                # 处理特定错误类型
+                if "已经发布过" in error_msg:
+                    logger.warning(f"视频已发布过: {error_msg}")
+                    return {"success": False, "error": error_msg, "duplicate": True}
+                
+                # 判断是否需要重试
+                if retry < max_retries - 1 and ("服务器忙" in error_msg or "临时服务不可用" in error_msg):
+                    logger.warning(f"服务器忙，将在 {retry_intervals[retry]} 秒后重试: {error_msg}")
+                    time.sleep(retry_intervals[retry])
+                    continue
+                
+                return {"success": False, "error": error_msg}
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"发布请求异常: {str(e)}")
+            
+            # 判断是否需要重试
+            if retry < max_retries - 1:
+                logger.warning(f"将在 {retry_intervals[retry]} 秒后重试")
+                time.sleep(retry_intervals[retry])
+                continue
+                
+            return {"success": False, "error": f"发布请求异常: {str(e)}"}
+            
+        except Exception as e:
+            logger.error(f"发布时出现意外错误: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            
+            # 判断是否需要重试
+            if retry < max_retries - 1:
+                logger.warning(f"将在 {retry_intervals[retry]} 秒后重试")
+                time.sleep(retry_intervals[retry])
+                continue
+                
+            return {"success": False, "error": f"发布时出现意外错误: {str(e)}"}
+    
+    # 如果所有重试都失败
+    return {"success": False, "error": "已达到最大重试次数，发布失败"}
 
 
 def get_app_id(cookies):
     headers = {
         'accept': '*/*',
         'accept-language': 'zh-CN,zh;q=0.9',
-        # 'cookie': 'JSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43GZ00; mobileSendTime=-1; credibleMobileSendTime=-1; ctuMobileSendTime=-1; riskMobileBankSendTime=-1; riskMobileAccoutSendTime=-1; riskMobileCreditSendTime=-1; riskCredibleMobileSendTime=-1; riskOriginalAccountMobileSendTime=-1; session.cookieNameId=ALIPAYJSESSIONID; cna=ova4H2k/PjoBASQOA3pmflO9; receive-cookie-deprecation=1; tfstk=fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.; EXC_ANT_KEY=excashier_20001_FP_SENIOR_HJPGP11505070830582; LoginForm=alipay_login_auth; CLUB_ALIPAY_COM=2088442960985162; iw.userid="K1iSL120ipFvFLCnWp3Rzw=="; ali_apache_tracktmp="uid=2088442960985162"; ALI_PAMIR_SID=U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2; __TRACERT_COOKIE_bucUserId=2088442960985162; auth_goto_http_type=https; ctoken=gwha_z9s2Q7fFA04; _CHIPS-ctoken=gwha_z9s2Q7fFA04; alipay="K1iSL120ipFvFLCnWp3Rz9W5rYlr9VP9dcKwk8Zv/g=="; auth_jwt=e30.eyJleHAiOjE3MzM3NTIyMDcyOTIsInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoiY1NQbERpWU5DK3pJRW5ja0V5NE1vK2lGTHhXeHlhSmI1OGYwM2V2IiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9._DCO3Uk3vQWyIwid3mx_QH_QS2jyx2GF_jnJAvElo-s; _CHIPS-ALIPAYJSESSIONID=RZ550RyGPQrtw5mQvhYIbEpl3OwPXdauthRZ43; zone=GZ00F; ALIPAYJSESSIONID=RZ550RyGPQrtw5mQvhYIbEpl3OwPXdauthRZ43GZ00; rtk=bXk6Oqseuv4JU4DLLXnqJ9ojkfUMBQACD3KTlhIozGT2BQgizes; userId=2088442960985162; JSESSIONID=C3C2EBAE3D29394EBDCF0CD321DACF66; spanner=YAtShxmvaflihRYh57A31ceymNvmR9/NXt2T4qEYgj0=',
+        # 'cookie': 'JSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43GZ00; mobileSendTime=-1; credibleMobileSendTime=-1; ctuMobileSendTime=-1; riskMobileBankSendTime=-1; riskMobileAccoutSendTime=-1; riskMobileCreditSendTime=-1; riskCredibleMobileSendTime=-1; riskOriginalAccountMobileSendTime=-1; session.cookieNameId=ALIPAYJSESSIONID; cna=ova4H2k/PjoBASQOA3pmflO9; receive-cookie-deprecation=1; tfstk=fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.; EXC_ANT_KEY=excashier_20001_FP_SENIOR_HJPGP11505070830582; LoginForm=alipay_login_auth; CLUB_ALIPAY_COM=2088442960985162; iw.userid="K1iSL120ipFvFLCnWp3Rzw=="; ali_apache_tracktmp="uid=2088442960985162"; ALI_PAMIR_SID=U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2; __TRACERT_COOKIE_bucUserId=2088442960985162; auth_goto_http_type=https; ctoken=R6PCbj3w7TAYSw-o; _CHIPS-ctoken=R6PCbj3w7TAYSw-o; alipay="K1iSL120ipFvFLCnWp3Rz9W5rYlr9VP9dcKwk8Zv/g=="; auth_jwt=e30.eyJleHAiOjE3MzM3NTIyMDcyOTIsInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoiY1NQbERpWU5DK3pJRW5ja0V5NE1vK2lGTHhXeHlhSmI1OGYwM2V2IiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9._DCO3Uk3vQWyIwid3mx_QH_QS2jyx2GF_jnJAvElo-s; _CHIPS-ALIPAYJSESSIONID=RZ550RyGPQrtw5mQvhYIbEpl3OwPXdauthRZ43; zone=GZ00F; ALIPAYJSESSIONID=RZ550RyGPQrtw5mQvhYIbEpl3OwPXdauthRZ43GZ00; rtk=bXk6Oqseuv4JU4DLLXnqJ9ojkfUMBQACD3KTlhIozGT2BQgizes; userId=2088442960985162; JSESSIONID=C3C2EBAE3D29394EBDCF0CD321DACF66; spanner=YAtShxmvaflihRYh57A31ceymNvmR9/NXt2T4qEYgj0=',
         'origin': 'https://c.alipay.com',
         'priority': 'u=1, i',
         'referer': 'https://c.alipay.com/',
@@ -1415,16 +1790,32 @@ def get_app_id(cookies):
     return json.loads(response.text).get('result').get('appId')
 
 
-def calculate_file_md5(file):
-    # 创建 MD5 对象
-    md5_hash = hashlib.md5()
-
-    chunk_size = 8192
-    while chunk := file.read(chunk_size):
-        md5_hash.update(chunk)
-
-    # 返回文件的 MD5 值（十六进制表示）
-    return md5_hash.hexdigest()
+def calculate_file_md5(file_obj):
+    """
+    计算文件的MD5值
+    
+    参数:
+        file_obj: 文件对象（已打开的文件）
+    
+    返回:
+        文件的MD5哈希值
+    """
+    # 保存文件当前位置
+    current_position = file_obj.tell()
+    
+    try:
+        # 重置文件指针到开头
+        file_obj.seek(0)
+        
+        # 计算MD5
+        md5_hash = hashlib.md5()
+        for chunk in iter(lambda: file_obj.read(4096), b''):
+            md5_hash.update(chunk)
+            
+        return md5_hash.hexdigest()
+    finally:
+        # 无论成功失败，都恢复文件指针到原始位置
+        file_obj.seek(current_position)
 
 
 def create_cover_from_video(video_path, output_path=None):
@@ -1580,273 +1971,342 @@ def update_publish_stats(appid, success=False, error_msg=None):
     except Exception as e:
         logger.error(f"更新发布统计失败: {str(e)}")
 
-def process_single_video(args):
-    """处理单个视频的上传"""
-    if thread_control.should_stop():
-        return {"success": False, "index": args[-2], "message": "任务被终止"}
-        
-    cookies, file_path, scheduleTime, title, appid, index, delete_original, topic_info = args
-    video_name = os.path.basename(file_path)
-    logger.info(f"开始处理视频: {video_name}")
-    
-    try:
-        # 验证定时发布时间
-        if scheduleTime:
-            try:
-                try:
-                    schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M:%S')
-                except ValueError:
-                    schedule_datetime = datetime.strptime(scheduleTime, '%Y-%m-%d %H:%M')
-                    
-                current_datetime = datetime.now()
-                if schedule_datetime <= current_datetime:
-                    error_msg = f"定时发布时间 {scheduleTime} 小于当前时间，跳过上传"
-                    return {"success": False, "index": index, "message": error_msg}
-            except ValueError as e:
-                error_msg = f"时间格式错误: {str(e)}"
-                return {"success": False, "index": index, "message": error_msg}
-
-        # 获取mt
-        logger.info(f"获取上传token - {video_name}")
-        mt = get_mt(cookies)
-        if not mt:
-            error_msg = "获取上传token失败"
-            return {"success": False, "index": index, "message": error_msg}
-            
-        # 生成封面图
-        logger.info(f"正在生成视频封面 - {video_name}")
-        cover_path = create_cover_from_video(file_path)
-        default_cover = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_cover.jpg")
-
-        if not cover_path or not os.path.exists(cover_path):
-            logger.info(f"无法生成视频封面，将使用默认封面 - {video_name}")
-            if os.path.exists(default_cover):
-                cover_path = default_cover
-            else:
-                error_msg = "无法生成封面且默认封面不存在"
-                return {"success": False, "index": index, "message": error_msg}
-
-        # 上传视频
-        logger.info(f"开始上传视频文件 - {video_name}")
-        file_id, videoFileName = upload_4m_video(mt, file_path)
-        if not file_id:
-            error_msg = "视频上传失败"
-            return {"success": False, "index": index, "message": error_msg}
-
-        # 上传封面
-        logger.info(f"开始上传封面图 - {video_name}")
-        try:
-            extProperty = upload_pic(cookies, cover_path)
-        except Exception as e:
-            logger.info(f"封面图上传失败，尝试使用默认封面 - {video_name}: {str(e)}")
-            try:
-                extProperty = upload_pic(cookies, default_cover)
-            except Exception as e:
-                error_msg = "封面上传失败"
-                return {"success": False, "index": index, "message": error_msg}
-
-        # 获取视频URL
-        logger.info(f"获取视频URL - {video_name}")
-        videoFile = get_video_url(file_id, mt)
-        if not videoFile:
-            error_msg = "获取视频URL失败"
-            return {"success": False, "index": index, "message": error_msg}
-
-        # 发布内容
-        logger.info(f"发布视频内容 - {video_name}")
-        publish_result = publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies, topic_info)
-        
-        if publish_result:
-            # 如果上传成功且需要删除原视频
-            if delete_original and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                    logger.info(f"已删除原视频: {file_path}")
-                    
-                    cover_file = os.path.splitext(file_path)[0] + '.jpg'
-                    if os.path.exists(cover_file):
-                        os.remove(cover_file)
-                        logger.info(f"已删除封面图片: {cover_file}")
-                except Exception as e:
-                    logger.error(f"删除文件失败: {str(e)}")
-            
-            return {
-                "success": True, 
-                "index": index,
-                "message": "发布成功",
-                "video_name": video_name,
-                "publish_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-        else:
-            return {
-                "success": False, 
-                "index": index,
-                "message": "发布失败",
-                "video_name": video_name
-            }
-            
-    except Exception as e:
-        error_msg = f"视频处理失败 - {video_name}: {str(e)}"
-        return {
-            "success": False, 
-            "index": index,
-            "message": error_msg,
-            "video_name": video_name
-        }
 
 
 def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3, appid=None, index=None,
                          max_uploads=None, delete_original=True, topic_info=None):
-    try:
-        start_time = time.time()
+    """
+    上传并发布视频 - 高效异步处理版本
+    
+    参数:
+        cookies: 登录后的cookie
+        dir_path: 视频目录路径
+        title: 视频标题格式
+        scheduleTime: 定时发布时间
+        max_workers: 最大工作线程数
+        appid: 账号ID
+        index: 账号索引
+        max_uploads: 最大上传数量
+        delete_original: 是否删除原始视频
+        topic_info: 话题信息
+    
+    返回:
+        字典，包含上传结果统计
+    """
+        # 如果max_uploads为0，直接返回不上传任何视频
+    if max_uploads == 0:
+        logger.info(f"上传数量设置为0，跳过上传")
+        return {"success": 0, "failed": 0, "total": 0, "details": []}
+    # 使用子账号的cookies（如果提供了appid）
+    if appid:
+        logger.info(f"检测到appid参数: {appid}，将使用子账号cookies")
         cookies = get_sub_cookies(cookies, appid)
-        thread_control.clear()
+        logger.info(f"已切换至子账号 {appid} 的cookies")
+    
+    # 获取视频文件列表
+    video_files = []
+    for root, _, files in os.walk(dir_path):
+        for file in files:
+            if file.lower().endswith((".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv")):
+                video_files.append(os.path.join(root, file))
+    
+    if not video_files:
+        logger.info(f"目录 {dir_path} 中没有找到视频文件")
+        return {"success": 0, "failed": 0, "total": 0, "details": []}
+    
+    # 限制上传数量
+    if max_uploads and len(video_files) > max_uploads:
+        logger.info(f"视频文件超过最大上传数量限制({max_uploads})，将只上传前{max_uploads}个文件")
+        video_files = video_files[:max_uploads]
+    
+    # 初始化统计信息
+    total_count = len(video_files)
+    thread_control = ThreadControl()
+    
+    # 创建发布队列和相关同步变量
+    publish_queue = queue.Queue()
+    upload_completed = threading.Event()
+    processing_completed = threading.Event()
+    
+    # 统计数据，使用线程安全的计数器
+    upload_counter = {"success": 0, "failed": 0, "total": total_count, "processed": 0}
+    publish_counter = {"success": 0, "failed": 0, "processed": 0}
+    processed_details = []
+    
+    # 线程安全的统计更新函数
+    def update_stats(counter, success=None, failed=None, processed=None):
+        with threading.Lock():
+            if success is not None:
+                counter["success"] += success
+            if failed is not None:
+                counter["failed"] += failed
+            if processed is not None:
+                counter["processed"] += processed
+    
+    # 定义发布处理线程
+    def publish_worker():
+        """处理视频发布的工作线程"""
+        logger.info("启动发布处理线程")
         
-        # 如果 max_uploads 为 0，直接返回
-        if max_uploads == 0:
-            logger.info("上传总数设置为0，不上传任何视频")
-            return {
-                "total": 0,
-                "success": 0,
-                "failed": 0,
-                "index": index,
-                "details": [],  # 添加详细信息列表
-                "time_spent": {
-                    "hours": 0,
-                    "minutes": 0,
-                    "seconds": 0,
-                    "total_seconds": 0
-                }
-            }
         
-        video_files = [os.path.join(dir_path, f) for f in os.listdir(dir_path) 
-                      if os.path.isfile(os.path.join(dir_path, f)) and f.lower().endswith('.mp4')]
-        
-        if not video_files:
-            logger.warning(f"目录 {dir_path} 中没有找到视频文件")
-            return {
-                "total": 0,
-                "success": 0,
-                "failed": 0,
-                "index": index,
-                "details": []
-            }
-        
-        # 限制上传数量
-        if max_uploads and max_uploads > 0:
-            video_files = video_files[:max_uploads]
-            
-        total_count = len(video_files)
-        success_count = 0
-        failed_count = 0
-        task_details = []  # 存储每个任务的详细信息
-        
-        # 创建线程池
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-            for file_path in video_files:
-                if thread_control.should_stop():
+        while True:
+            try:
+                # 从队列获取发布信息
+                publish_info = publish_queue.get()
+                if publish_info is None:
+                    publish_queue.task_done()
                     break
-                future = executor.submit(process_single_video, 
-                                      (cookies, file_path, scheduleTime, title, appid, index, delete_original, topic_info))
-                thread_control.add_future(future)
-                futures.append(future)
-            
-            # 等待所有任务完成并收集结果
-            for future in futures:
+
+                # 解析发布所需信息
+                file_id = publish_info["file_id"]
+                video_name = publish_info["video_name"]
+                pic_result = publish_info.get("pic_result")
+                file_path = publish_info.get("file_path", "")
+
+                # 为发布获取新的mt令牌
+                mt = get_mt(cookies)
+                if not mt:
+                    logger.error(f"获取发布令牌失败: {video_name}")
+                    update_stats(publish_counter, failed=1, processed=1)
+                    update_publish_stats(appid, success=False, error_msg="获取发布令牌失败")
+                    publish_queue.task_done()
+                    continue
+                # 获取视频URL
+                video_url = get_video_url(file_id, mt)
+                if not video_url:
+                    logger.error(f"获取视频URL失败: {video_name}")
+                    return None, None, None, None, None
+                # 生成或格式化标题
+                video_title = title
+                if "{name}" in title:
+                    name_without_ext = os.path.splitext(video_name)[0]
+                    video_title = title.replace("{name}", name_without_ext)
+
+                logger.info(f"开始发布视频: {video_name}, 标题: {video_title}")
+                
+                # 打印发布参数
+                publish_params = {
+                    'loginPublicId': appid,
+                    'videoId': file_id,
+                    'videoFile': video_url,
+                    'videoFileName': video_name,
+                    'extProperty': pic_result,
+                    'mt': mt,
+                    'scheduleTime': scheduleTime,
+                    'title': video_title,
+                    'topic_info': topic_info
+                }
+                logger.info(f"发布参数: {publish_params}")
+                
                 try:
-                    if thread_control.should_stop():
-                        break
-                    result = future.result()
-                    # 收集任务详细信息
-                    task_detail = {
-                        "video_name": result.get("video_name", "未知视频"),
-                        "success": result.get("success", False),
-                        "message": result.get("message", ""),
-                        "publish_time": result.get("publish_time", "")
-                    }
-                    task_details.append(task_detail)
+                    publish_result = publish(
+                        loginPublicId=appid,
+                        videoId=file_id,
+                        videoFile=video_url,
+                        videoFileName=video_name,
+                        extProperty=pic_result,
+                        mt=mt,  # 使用与上传时相同的mt
+                        scheduleTime=scheduleTime,
+                        title=video_title,
+                        cookies=cookies,
+                        topic_info=topic_info
+                    )
                     
-                    if result and result.get("success", False):
-                        success_count += 1
+                    if publish_result and publish_result.get("success"):
+                        logger.info(f"视频发布成功: {video_name}")
+                        update_stats(publish_counter, success=1, processed=1)
+                        update_publish_stats(appid, success=True)
+                        
+                        result = {
+                            "file_path": file_path,
+                            "success": True,
+                            "video_name": video_name,
+                            "publish_time": publish_result.get("publishTime", ""),
+                            "message": "发布成功"
+                        }
+                                    # 如果设置了删除原视频
+                        if delete_original and os.path.exists(file_path):
+                            try:
+                                os.remove(file_path)
+                                logger.info(f"已删除原视频文件: {file_path}")
+                            except Exception as e:
+                                logger.error(f"删除原视频文件失败: {str(e)}")
+
                     else:
-                        failed_count += 1
+                        error_msg = publish_result.get("errorMessage", "未知错误")
+                        logger.error(f"视频发布失败: {video_name} - {error_msg}")
+                        update_stats(publish_counter, failed=1, processed=1)
+                        update_publish_stats(appid, success=False, error_msg=error_msg)
+                        
+                        result = {
+                            "file_path": file_path,
+                            "success": False,
+                            "video_name": video_name,
+                            "error": f"发布失败: {error_msg}"
+                        }
                 except Exception as e:
-                    logger.error(f"任务执行失败: {str(e)}")
-                    task_details.append({
-                        "video_name": "未知视频",
+                    logger.error(f"发布过程中出现异常: {str(e)}")
+                    update_stats(publish_counter, failed=1, processed=1)
+                    update_publish_stats(appid, success=False, error_msg=str(e))
+                    
+                    result = {
+                        "file_path": file_path,
                         "success": False,
-                        "message": str(e),
-                        "publish_time": ""
-                    })
-                    failed_count += 1
-                finally:
-                    thread_control.remove_future(future)
-        
-        # 计算总耗时
-        end_time = time.time()
-        total_time = end_time - start_time
-        hours = int(total_time // 3600)
-        minutes = int((total_time % 3600) // 60)
-        seconds = int(total_time % 60)
-        
-        # 任务完成后，统一更新数据库
+                        "video_name": video_name,
+                        "error": f"发布异常: {str(e)}"
+                    }
+                
+                # 记录处理结果
+                with threading.Lock():
+                    processed_details.append(result)
+                
+                # 标记任务完成
+                publish_queue.task_done()
+                
+            except Exception as e:
+                logger.error(f"发布工作线程异常: {str(e)}")
+                if publish_queue.unfinished_tasks > 0:
+                    publish_queue.task_done()
+    
+    # 启动发布处理线程
+    publish_thread = threading.Thread(target=publish_worker)
+    publish_thread.daemon = True
+    publish_thread.start()
+    
+    # 定义上传函数
+    def upload_video(file_path):
         try:
-            conn = sqlite3.connect('data.db')
-            cursor = conn.cursor()
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            logger.info(f"开始处理视频文件: {file_path}")
+            video_name = os.path.basename(file_path)
+            file_size = os.path.getsize(file_path)
+
+            # 为每个视频获取独立的mt
+            mt = get_mt(cookies)
+            if not mt:
+                logger.error(f"获取上传令牌失败: {video_name}")
+                return None, None, None, None, None
+
+            # 上传视频文件
+            logger.info(f"开始上传视频: {video_name}")
+            file_id = None
+            if file_size <= 4 * 1024 * 1024:  # 4MB
+                file_id,file_name = upload_4m_video(mt, file_path)
+            else:
+                file_id,file_name = upload_large_video(mt, file_path, file_size)
+
+            if not file_id:
+                logger.error(f"视频上传失败: {video_name}")
+                return None, None, None, None, None
+
+            # 生成并上传封面
+            cover_path = None
+            pic_result = None
+            try:
+                cover_path = create_cover_from_video(file_path)
+                if cover_path and os.path.exists(cover_path):
+                    logger.info(f"开始上传封面: {video_name}")
+                    pic_result = upload_pic(cookies, cover_path)
+                    if not pic_result:
+                        logger.warning(f"封面上传失败，将使用系统生成的封面 - {video_name}")
+                else:
+                    logger.warning(f"封面生成失败，将使用系统生成的封面 - {video_name}")
+            except Exception as e:
+                logger.error(f"处理封面时出错: {str(e)}")
+
             
-            # 直接设置当前批次的成功和失败数量
-            cursor.execute('''
-                UPDATE user_data 
-                SET daily_success = ?,
-                    daily_failed = ?,
-                    last_publish_time = ?
-                WHERE appid = ?
-            ''', (success_count, failed_count, current_time, appid))
-            
-            conn.commit()
-            conn.close()
-            
-            logger.info(f"数据库更新成功 - appid: {appid}, 成功: {success_count}, 失败: {failed_count}")
+
+            # 如果生成了临时封面文件，删除它
+            if cover_path and os.path.exists(cover_path):
+                try:
+                    os.remove(cover_path)
+                    logger.info("已删除临时封面文件")
+                except Exception as e:
+                    logger.error(f"删除临时封面文件失败: {str(e)}")
+
+            # 将视频信息添加到发布队列
+            publish_info = {
+                "file_id": file_id,
+                "video_name": video_name,
+                "pic_result": pic_result,
+                "file_path": file_path,
+                "mt": mt  # 传递mt给发布函数
+            }
+            logger.info(f"将视频添加到发布队列: {video_name}")
+            publish_queue.put(publish_info)
+            update_stats(upload_counter, success=1, processed=1)
+
+            return file_id, video_name, pic_result, mt
+
         except Exception as e:
-            logger.error(f"数据库更新失败: {str(e)}")
-        
-        logger.info(f"上传完成统计:")
-        logger.info(f"总计: {total_count} 个视频")
-        logger.info(f"成功: {success_count} 个")
-        logger.info(f"失败: {failed_count} 个")
-        logger.info(f"总耗时: {hours}小时{minutes}分钟{seconds}秒")
-        
-        # 返回完整的统计结果
-        return {
-            "total": total_count,
-            "success": success_count,
-            "failed": failed_count,
-            "index": index,
-            "details": task_details,  # 包含每个任务的详细信息
-            "time_spent": {
-                "hours": hours,
-                "minutes": minutes,
-                "seconds": seconds,
-                "total_seconds": total_time
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"上传任务发生错误: {str(e)}")
-        return {
-            "total": 0,
-            "success": 0,
-            "failed": 0,
-            "index": index,
-            "details": [],
-            "time_spent": {
-                "hours": 0,
-                "minutes": 0,
-                "seconds": 0,
-                "total_seconds": 0
-            }
-        }
+            logger.error(f"上传视频时发生错误: {str(e)}")
+            return None, None, None, None, None
+    
+    # 使用线程池进行并发上传
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有上传任务
+            futures = [executor.submit(upload_video, file_path) for file_path in video_files]
+            
+            # 等待所有上传任务完成
+            for future in as_completed(futures):
+                try:
+                    result = future.result()  # 获取结果，捕获任何异常
+                    if not any(result):  # 如果上传失败
+                        update_stats(upload_counter, failed=1, processed=1)
+                    # 成功的情况已经在upload_video中更新了计数器
+                except Exception as e:
+                    logger.error(f"上传任务执行出错: {str(e)}")
+                    update_stats(upload_counter, failed=1, processed=1)
+            
+            # 设置上传完成标志
+            upload_completed.set()
+            logger.info("所有视频上传任务已完成，等待发布队列处理完成...")
+            
+            # 向发布队列发送结束信号
+            publish_queue.put(None)
+
+            if not publish_queue.empty():
+                logger.info("等待发布队列处理完成...")
+                try:
+                    publish_queue.join()
+                except Exception as e:
+                    logger.error(f"等待发布队列完成时出错: {str(e)}")
+    
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("接收到终止信号，正在停止所有任务...")
+        thread_control.stop()
+        upload_completed.set()  # 确保发布线程能够退出
+    
+    # 等待发布线程完成
+    publish_thread.join(timeout=5)
+    
+    # 返回最终结果
+    logger.info(f"账号 {appid} 的视频处理完成统计:")
+    logger.info(f"上传统计 - 总计: {total_count}, 成功: {upload_counter['success']}, 失败: {upload_counter['failed']}")
+    logger.info(f"发布统计 - 处理: {publish_counter['processed']}, 成功: {publish_counter['success']}, 失败: {publish_counter['failed']}")
+    
+    # 真正的成功只有发布成功的
+    success_count = publish_counter["success"]
+    # 失败包括：上传失败的 + (上传成功但发布失败的)
+    # 上传成功但发布失败 = 上传成功数 - 发布成功数
+    upload_success_publish_failed = max(0, upload_counter["success"] - publish_counter["success"])
+    failed_count = upload_counter["failed"] + upload_success_publish_failed
+    
+    logger.info(f"最终统计结果 - 总计: {total_count}, 成功: {success_count}, 失败: {failed_count}")
+    
+    return {
+        "success": success_count,
+        "failed": failed_count,
+        "total": total_count,
+        "details": processed_details
+    }
+
+# 辅助函数 - 转换字节为人类可读的大小
+def human_readable_size(size, decimal_places=2):
+    for unit in ['B','KB','MB','GB','TB']:
+        if size < 1024.0:
+            break
+        size /= 1024.0
+    return f"{size:.{decimal_places}f} {unit}"
 
 create_table()
