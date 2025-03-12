@@ -1246,10 +1246,19 @@ def upload_large_video(mt, file_path, file_size):
 
 
 def upload_complete(mt, file_id):
+    """
+    完成分块上传过程
+    
+    Args:
+        mt: 上传令牌
+        file_id: 文件ID
+        
+    Returns:
+        dict: 响应结果，成功时返回响应JSON，失败时抛出异常
+    """
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9',
-        # 'content-length': '0',
         'origin': 'https://c.alipay.com',
         'priority': 'u=1, i',
         'referer': 'https://c.alipay.com/',
@@ -1266,8 +1275,103 @@ def upload_complete(mt, file_id):
         'x-mass-token': mt
     }
 
-    response = requests.post('https://mass.alipay.com/file/multipart/upload/complete', headers=headers)
-    logger.info(response.json())
+    # 重试参数
+    max_retries = 3
+    retry_interval = 2
+    
+    # 使用会话对象以支持连接重用
+    session = requests.Session()
+    
+    # 超时设置(连接超时, 读取超时)
+    timeout = (10, 30)
+    
+    for attempt in range(max_retries):
+        try:
+            # 检查是否应当停止
+            if thread_control.should_stop():
+                logger.warning("已收到停止信号，中断完成上传")
+                raise Exception("任务已被用户中断")
+                
+            # 发送请求
+            logger.info(f"完成上传请求 - 第{attempt + 1}次尝试")
+            
+            # 使用超时参数
+            response = session.post(
+                'https://mass.alipay.com/file/multipart/upload/complete', 
+                headers=headers,
+                timeout=timeout
+            )
+            
+            # 检查状态码
+            if response.status_code != 200:
+                logger.warning(f"完成上传 HTTP 错误: {response.status_code}")
+                if attempt < max_retries - 1:
+                    wait_time = retry_interval * (attempt + 1)
+                    logger.info(f"等待 {wait_time} 秒后重试...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception(f"完成上传请求失败，HTTP状态码: {response.status_code}")
+            
+            # 解析响应
+            try:
+                result = response.json()
+                # 检查是否成功
+                if result.get('success') is not True:
+                    error_msg = result.get('errorMsg', '未知错误')
+                    logger.error(f"完成上传API返回错误: {error_msg}")
+                    if attempt < max_retries - 1:
+                        wait_time = retry_interval * (attempt + 1)
+                        logger.info(f"等待 {wait_time} 秒后重试...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        raise Exception(f"完成上传API返回错误: {error_msg}")
+                
+                # 成功完成
+                logger.info(f"完成上传成功: {result}")
+                return result
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"完成上传解析JSON失败: {str(e)}")
+                logger.info(f"原始响应: {response.text}")
+                if attempt < max_retries - 1:
+                    wait_time = retry_interval * (attempt + 1)
+                    logger.info(f"等待 {wait_time} 秒后重试...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception(f"解析完成上传响应失败: {str(e)}")
+        
+        except requests.exceptions.Timeout as e:
+            logger.error(f"完成上传请求超时: {str(e)}")
+            if attempt < max_retries - 1:
+                wait_time = retry_interval * (attempt + 1)
+                logger.info(f"等待 {wait_time} 秒后重试...")
+                time.sleep(wait_time)
+            else:
+                raise Exception(f"完成上传请求超时，已重试{max_retries}次: {str(e)}")
+                
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"完成上传连接错误: {str(e)}")
+            if attempt < max_retries - 1:
+                wait_time = retry_interval * (attempt + 1) * 2  # 连接错误使用更长的等待时间
+                logger.info(f"等待 {wait_time} 秒后重试...")
+                time.sleep(wait_time)
+            else:
+                raise Exception(f"完成上传连接错误，已重试{max_retries}次: {str(e)}")
+                
+        except Exception as e:
+            logger.error(f"完成上传过程中出现异常: {str(e)}")
+            if attempt < max_retries - 1:
+                wait_time = retry_interval * (attempt + 1)
+                logger.info(f"等待 {wait_time} 秒后重试...")
+                time.sleep(wait_time)
+            else:
+                raise Exception(f"完成上传失败，已重试{max_retries}次: {str(e)}")
+    
+    # 如果所有重试都失败
+    raise Exception(f"完成上传失败，已达到最大重试次数({max_retries}次)")
 
 def _upload_chunk(mt, file_id, chunk_number, chunk_data, start_pos, total_chunks):
     """
@@ -1443,9 +1547,18 @@ def upload_pic(cookies, video_file_path):
         return json.loads(response.text).get('extProperty')
 
 
-def get_video_url(file_id, mt, max_retries=60, retry_interval=3):  # 60次 * 10秒 = 10分钟
+def get_video_url(file_id, mt, max_retries=60, retry_interval=3):  # 60次 * 3秒 = 3分钟
     """
-    获取视频URL，10分钟内每10秒重试一次
+    获取视频URL，持续重试直到成功或达到最大尝试次数
+    
+    Args:
+        file_id: 文件ID
+        mt: 令牌
+        max_retries: 最大重试次数
+        retry_interval: 重试间隔(秒)
+        
+    Returns:
+        str: 视频URL，失败时抛出异常
     """
     headers = {
         'accept': 'application/json, text/plain, */*',
@@ -1462,31 +1575,57 @@ def get_video_url(file_id, mt, max_retries=60, retry_interval=3):  # 60次 * 10�
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     }
 
+    # 使用会话对象以支持连接重用和超时设置
+    session = requests.Session()
+    
+    # 配置请求超时参数
+    timeout = (10, 30)  # 连接超时10秒，读取超时30秒
+    
     for attempt in range(max_retries):
+        # 检查是否应当终止
+        if thread_control.should_stop():
+            logger.warning("已收到停止信号，中断视频URL获取")
+            raise Exception("任务已被用户中断")
+            
         try:
             # 构建请求URL
             url = f'https://mmtcapi.alipay.com/video/2.0/convert/query?fileId={file_id}&mt={mt}&bizKey=content_lifetab'
             
-            # 打印请求参数
+            # 记录请求信息
             logger.info(f"\n获取视频URL - 第{attempt + 1}次尝试:")
             logger.info(f"URL: {url}")
-            logger.info(f"Headers: {json.dumps(headers, indent=2, ensure_ascii=False)}")
-            logger.info(f"参数信息:")
-            logger.info(f"  - 文件ID: {file_id}")
-            logger.info(f"  - MT令牌: {mt}")
             
             # 发送请求
-            response = requests.get(url, headers=headers)
+            response = session.get(url, headers=headers, timeout=timeout)
             
-            # 打印响应内容
-            logger.info(f"\n获取视频URL响应 - 第{attempt + 1}次尝试:")
-            logger.info(f"状态码: {response.status_code}")
-            logger.info(f"响应头: {json.dumps(dict(response.headers), indent=2, ensure_ascii=False)}")
-            
-            try:
-                response_json = json.loads(response.text)
-                logger.info(f"响应内容: {json.dumps(response_json, indent=2, ensure_ascii=False)}")
+            # 检查HTTP状态码
+            if response.status_code != 200:
+                logger.warning(f"HTTP错误: {response.status_code}")
+                # 根据状态码判断是否需要继续
+                if response.status_code >= 500:  # 服务器错误
+                    logger.info("服务器错误，将重试")
+                elif response.status_code == 429:  # 请求过多
+                    logger.info("请求频率过高，将重试")
+                elif response.status_code >= 400:  # 客户端错误
+                    logger.error(f"客户端请求错误: {response.status_code}")
                 
+                if attempt < max_retries - 1:
+                    time.sleep(retry_interval)
+                continue
+                
+            # 解析响应
+            try:
+                response_json = response.json()
+                
+                # 检查响应中是否有错误信息
+                if 'success' in response_json and not response_json['success']:
+                    error_msg = response_json.get('errorMsg', '未知错误')
+                    logger.warning(f"API返回错误: {error_msg}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_interval)
+                    continue
+                
+                # 提取视频URL
                 data = response_json.get('data', {})
                 trans_code = data.get('transCode', {})
                 convert_results = trans_code.get('convertResults', [])
@@ -1496,23 +1635,41 @@ def get_video_url(file_id, mt, max_retries=60, retry_interval=3):  # 60次 * 10�
                     logger.info(f"成功获取到视频URL: {video_url}")
                     return video_url
                 else:
-                    logger.info("未获取到视频URL，等待重试...")
+                    # 记录详细的失败信息用于调试
+                    logger.info(f"未获取到视频URL: {json.dumps(response_json, indent=2, ensure_ascii=False)}")
             except json.JSONDecodeError as e:
                 logger.error(f"解析响应JSON失败: {str(e)}")
                 logger.info(f"原始响应内容: {response.text}")
+            except KeyError as e:
+                logger.error(f"响应格式不正确: {str(e)}")
+                logger.info(f"响应内容: {json.dumps(response_json, indent=2, ensure_ascii=False) if 'response_json' in locals() else response.text}")
 
+            # 检查是否已达最大重试次数
             if attempt < max_retries - 1:
-                logger.info(f"等待 {retry_interval} 秒后重试...")
-            time.sleep(retry_interval)
+                # 使用退避策略增加重试间隔
+                adjusted_interval = min(retry_interval * (1 + attempt * 0.2), 10)  # 最大不超过10秒
+                logger.info(f"等待 {adjusted_interval:.1f} 秒后重试...")
+                time.sleep(adjusted_interval)
 
-        except Exception as e:
-            logger.error(f'获取视频URL失败: {str(e)}')
+        except requests.exceptions.Timeout as e:
+            logger.error(f'请求超时: {str(e)}')
             if attempt < max_retries - 1:
                 logger.info(f"等待 {retry_interval} 秒后重试...")
                 time.sleep(retry_interval)
-            else:
-                raise Exception(f"获取视频URL失败，已重试{max_retries}次: {str(e)}")
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f'连接错误: {str(e)}')
+            if attempt < max_retries - 1:
+                # 连接错误时使用更长的等待时间
+                wait_time = retry_interval * 2
+                logger.info(f"等待 {wait_time} 秒后重试...")
+                time.sleep(wait_time)
+        except Exception as e:
+            logger.error(f'获取视频URL时出现异常: {str(e)}')
+            if attempt < max_retries - 1:
+                logger.info(f"等待 {retry_interval} 秒后重试...")
+                time.sleep(retry_interval)
 
+    # 如果所有重试都失败
     raise Exception(f"获取视频URL失败，已达到最大重试次数({max_retries}次)")
 
 def format_time_string(time_str):
@@ -2021,7 +2178,8 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
     
     # 初始化统计信息
     total_count = len(video_files)
-    thread_control = ThreadControl()
+    # 使用全局thread_control实例，不要重新创建
+    # thread_control = ThreadControl()
     
     # 创建发布队列和相关同步变量
     publish_queue = queue.Queue()
