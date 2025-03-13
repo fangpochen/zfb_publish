@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import shutil
 from PIL import Image
 import queue
+import traceback
 
 
 # 在文件开头添加线程控制类
@@ -278,38 +279,82 @@ def get_sub_cookies(cookies, appid):
     Returns:
         更新后的cookie
     '''
-    res_cookie = cookies
-    headers = {
-        'accept': 'application/json, text/plain, */*',
-        'accept-language': 'zh-CN,zh;q=0.9,en-GB;q=0.8,en;q=0.7,en-US;q=0.6',
-        'cache-control': 'no-cache',
-        # 'content-length': '0',
-        # 'cookie': 'JSESSIONID=RZ436NIMLe7ASdpezV71u376X2IQahauthRZ42GZ00; mobileSendTime=-1; credibleMobileSendTime=-1; ctuMobileSendTime=-1; riskMobileBankSendTime=-1; riskMobileAccoutSendTime=-1; riskMobileCreditSendTime=-1; riskCredibleMobileSendTime=-1; riskOriginalAccountMobileSendTime=-1; cna=iEUyH7Q98FICAYvisk82DHns; receive-cookie-deprecation=1; session.cookieNameId=ALIPAYJSESSIONID; _CHIPS-session.cookieNameId=ALIPAYJSESSIONID; ctoken=Ja45PCG8BmCTtxsy; _CHIPS-ctoken=Ja45PCG8BmCTtxsy; LoginForm=alipay_login_auth; CLUB_ALIPAY_COM=2088512543500829; iw.userid="K1iSL1z1pqCWjGLmrs2sHA=="; ali_apache_tracktmp="uid=2088512543500829"; auth_jwt=e30.eyJleHAiOjE3MzQxNjQwNTcyNDcsInJsIjoiNSwwLDI3LDE5LDI4LDMwLDEzLDEwIiwic2N0IjoiZHFLa0g0ZDdyUHoxc0pkMlZ5VVlmZXdGTDhuVUlyQUwwY2RlYjQ5IiwidWlkIjoiMjA4ODUxMjU0MzUwMDgyOSJ9.9hqWhVCfzVTgC5JEP2j1kJwrr_Wo0iYySq9gSfE5oEQ; rtk=Tk0GSQGb0seU1FAvKkzsbgm3uzAgAqVCp1TfIKtjPsbEAq9aPpG; __TRACERT_COOKIE_bucUserId=2088512543500829; ALI_PAMIR_SID="U82weP26yrFQfOlejZu0hK24zgy#019XEeEpTbekl/1PRTpEiTgy"; _CHIPS-ALIPAYJSESSIONID=RZ436NIMLe7ASdpezV71u376X2IQahauthGZ00RZ43; zone=GZ00G; ALIPAYJSESSIONID=RZ436NIMLe7ASdpezV71u376X2IQahauthRZ43GZ00; JSESSIONID=569CE43AD4A0299569CB4EE4511A0178; spanner=nAAoEVBZIlp3I8hjJVJVeF+i1tpfWVcP4EJoL7C0n0A=',
-        'origin': 'https://c.alipay.com',
-        'pragma': 'no-cache',
-        'priority': 'u=1, i',
-        'referer': 'https://c.alipay.com/',
-        'sec-ch-ua': '"Microsoft Edge";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-site',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
-    }
-    params = {
-        'ctoken': 'Ja45PCG8BmCTtxsy',
-        'appId': f'{appid}',
-    }
-    response = requests.post(
-        'https://contentweb.alipay.com/life/lifeSelectSwitch.json',
-        params=params,
-        cookies=cookies,
-        headers=headers,
-    )
-    for cookie in response.cookies:
-        res_cookie[cookie.name] = cookie.value
-    return res_cookie
+    try:
+        # 创建一个复制，避免修改原始cookies
+        res_cookie = cookies.copy()
+        
+        # 尝试从当前cookies获取ctoken
+        ctoken = cookies.get('ctoken', '')
+        if not ctoken:
+            logger.warning(f"无法从cookies获取ctoken，将使用默认值")
+            ctoken = 'defaultCtoken'
+        
+        headers = {
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9,en-GB;q=0.8,en;q=0.7,en-US;q=0.6',
+            'cache-control': 'no-cache',
+            'origin': 'https://c.alipay.com',
+            'pragma': 'no-cache',
+            'priority': 'u=1, i',
+            'referer': 'https://c.alipay.com/',
+            'sec-ch-ua': '"Microsoft Edge";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-site',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+        }
+        
+        params = {
+            'ctoken': ctoken,
+            'appId': f'{appid}',
+        }
+        
+        logger.info(f"正在尝试切换到子账号 {appid} 的cookies")
+        
+        response = requests.post(
+            'https://contentweb.alipay.com/life/lifeSelectSwitch.json',
+            params=params,
+            cookies=cookies,
+            headers=headers,
+            timeout=(5, 15)  # 设置连接超时和响应超时
+        )
+        
+        # 记录响应状态
+        logger.info(f"切换子账号响应状态: {response.status_code}")
+        
+        # 检查HTTP状态
+        if response.status_code != 200:
+            logger.error(f"切换子账号失败，HTTP状态码: {response.status_code}, 响应内容: {response.text}")
+            return None
+            
+        # 检查响应内容是否为空
+        if not response.text:
+            logger.error("切换子账号接口返回空响应")
+            return None
+            
+        # 检查响应的cookies是否包含任何内容
+        if not response.cookies:
+            logger.warning("响应中没有cookies，可能需要重新登录")
+            
+        # 更新cookies
+        for cookie in response.cookies:
+            logger.debug(f"更新cookie: {cookie.name}={cookie.value}")
+            res_cookie[cookie.name] = cookie.value
+            
+        logger.info(f"已切换至子账号 {appid} 的cookies")
+        return res_cookie
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"切换子账号时网络错误: {str(e)}")
+        logger.error(f"完整堆栈跟踪:\n{traceback.format_exc()}")
+        return None
+    except Exception as e:
+        logger.error(f"切换子账号时发生未知错误: {str(e)}")
+        logger.error(f"完整堆栈跟踪:\n{traceback.format_exc()}")
+        return None
+
 # 获取子账号
 def get_lifeOptionList(cookies, appid):
     '''
@@ -873,10 +918,12 @@ def collecting_tasks(cookies, appid, taskId_list):
 
 
 def get_mt(cookies):
+    import traceback
+    
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9',
-        # 'cookie': 'JSESSIONID=RZ550RyGPQrtw5mQvhYIbEpl3OwPXdauthRZ43GZ00; mobileSendTime=-1; credibleMobileSendTime=-1; ctuMobileSendTime=-1; riskMobileBankSendTime=-1; riskMobileAccoutSendTime=-1; riskMobileCreditSendTime=-1; riskCredibleMobileSendTime=-1; riskOriginalAccountMobileSendTime=-1; session.cookieNameId=ALIPAYJSESSIONID; cna=ova4H2k/PjoBASQOA3pmflO9; receive-cookie-deprecation=1; tfstk=fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.; EXC_ANT_KEY=excashier_20001_FP_SENIOR_HJPGP11505070830582; LoginForm=alipay_login_auth; CLUB_ALIPAY_COM=2088442960985162; iw.userid="K1iSL120ipFvFLCnWp3Rzw=="; ali_apache_tracktmp="uid=2088442960985162"; ALI_PAMIR_SID=U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2; __TRACERT_COOKIE_bucUserId=2088442960985162; auth_goto_http_type=https; ctoken=R6PCbj3w7TAYSw-o; _CHIPS-ctoken=R6PCbj3w7TAYSw-o; alipay="K1iSL120ipFvFLCnWp3Rz9W5rYlr9VP9dcKwk8Zv/g=="; auth_jwt=e30.eyJleHAiOjE3MzM3NTIyMDcyOTIsInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoiY1NQbERpWU5DK3pJRW5ja0V5NE1vK2lGTHhXeHlhSmI1OGYwM2V2IiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9._DCO3Uk3vQWyIwid3mx_QH_QS2jyx2GF_jnJAvElo-s; _CHIPS-ALIPAYJSESSIONID=RZ550RyGPQrtw5mQvhYIbEpl3OwPXdauthRZ43; zone=GZ00F; ALIPAYJSESSIONID=RZ550RyGPQrtw5mQvhYIbEpl3OwPXdauthRZ43GZ00; rtk=bXk6Oqseuv4JU4DLLXnqJ9ojkfUMBQACD3KTlhIozGT2BQgizes; userId=2088442960985162; JSESSIONID=C3C2EBAE3D29394EBDCF0CD321DACF66; spanner=YAtShxmvaflihRYh57A31ceymNvmR9/NXt2T4qEYgj0=',
+        # 'cookie': 已删除原有注释中的cookie字符串
         'origin': 'https://c.alipay.com',
         'priority': 'u=1, i',
         'referer': 'https://c.alipay.com/',
@@ -893,9 +940,55 @@ def get_mt(cookies):
         'type': 'VIDEO',
     }
 
-    response = requests.get('https://contentweb.alipay.com/life/queryMasstoken.json', params=params, cookies=cookies,
-                            headers=headers)
-    return json.loads(response.text).get("result").get("massToken")
+    try:
+        logger.info("开始获取massToken...")
+        response = requests.get(
+            'https://contentweb.alipay.com/life/queryMasstoken.json', 
+            params=params, 
+            cookies=cookies,
+            headers=headers,
+            timeout=15  # 添加超时设置
+        )
+        
+        # 记录响应状态
+        logger.info(f"获取massToken响应状态: {response.status_code}")
+        
+        # 检查HTTP状态
+        if response.status_code != 200:
+            logger.error(f"获取massToken失败，HTTP状态码: {response.status_code}，响应内容: {response.text}")
+            return None
+            
+        
+        # 解析JSON响应
+        try:
+            data = json.loads(response.text)
+        except json.JSONDecodeError as e:
+            logger.error(f"解析massToken响应JSON失败: {str(e)}")
+            logger.error(f"响应内容: {response.text}")
+            logger.error(f"完整堆栈跟踪:\n{traceback.format_exc()}")
+            return None
+        
+        # 检查结果
+        if not data.get("result"):
+            logger.error(f"获取massToken失败，响应不包含result字段: {data}")
+            return None
+            
+        mass_token = data.get("result").get("massToken")
+        if not mass_token:
+            logger.error(f"获取massToken失败，massToken为空: {data}")
+            return None
+            
+        logger.info("成功获取massToken")
+        return mass_token
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"请求massToken时网络错误: {str(e)}")
+        logger.error(f"完整堆栈跟踪:\n{traceback.format_exc()}")
+        return None
+    except Exception as e:
+        logger.error(f"获取massToken时发生未知错误: {str(e)}")
+        logger.error(f"完整堆栈跟踪:\n{traceback.format_exc()}")
+        return None
 
 
 def get_traid():
@@ -959,8 +1052,6 @@ def upload_4m_video(mt, file_path):
                         timeout=(15, 120)  # (连接超时, 读取超时)
                     )
                     
-                    # 记录详细的响应信息，包括状态码
-                    logger.info(f'upload_4m_video 状态码: {response.status_code}, 响应内容: {response.text}')
                     
                     # 检查HTTP状态码
                     if response.status_code != 200:
@@ -1038,7 +1129,7 @@ def upload_4m_video(mt, file_path):
 
 def upload_large_video(mt, file_path, file_size):
     """
-    分块上传大文件，通过并行上传分块来最大化利用上行带宽
+    分块上传大文件，通过队列控制内存使用
     
     参数:
     - mt: 上传令牌
@@ -1055,10 +1146,11 @@ def upload_large_video(mt, file_path, file_size):
     # 最大重试次数
     max_retries = 3  
     retry_count = 0
+    chunk_size = 4 * 1024 * 1024  # 4MB 分块大小
     
     while retry_count < max_retries:
         try:
-            # 1. 计算文件MD5 - 使用with语句确保文件正确关闭
+            # 1. 计算文件MD5
             file_md5 = ""
             with open(file_path, 'rb') as f:
                 file_md5 = calculate_file_md5(f)
@@ -1089,149 +1181,144 @@ def upload_large_video(mt, file_path, file_size):
                 'x-mass-traceid': get_traid(),
             }
 
-            # 打印请求参数
-            # logger.info("初始化上传请求参数:")
-            # logger.info(f"URL: https://mass.alipay.com/file/multipart/upload/claim")
-            # logger.info(f"Headers: {json.dumps(headers, indent=2, ensure_ascii=False)}")
-            # logger.info(f"文件信息:")
-            # logger.info(f"  - 文件名: {file_name}")
-            # logger.info(f"  - 文件大小: {human_readable_size(file_size)}")
-            # logger.info(f"  - 文件MD5: {file_md5}")
-            # logger.info(f"  - MT令牌: {mt}")
-
             # 初始化上传请求
             response = requests.post('https://mass.alipay.com/file/multipart/upload/claim', headers=headers)
-            
-            # 打印完整响应内容
-            logger.info("初始化上传响应:")
-            logger.info(f"状态码: {response.status_code}")
-            logger.info(f"响应头: {json.dumps(dict(response.headers), indent=2, ensure_ascii=False)}")
-            try:
-                response_json = response.json()
-                logger.info(f"响应内容: {json.dumps(response_json, indent=2, ensure_ascii=False)}")
-            except:
-                logger.info(f"响应内容: {response.text}")
             
             # 检查状态码
             if response.status_code != 200:
                 error_msg = f"初始化上传失败 - HTTP错误: {response.status_code}"
                 if response.text:
                     error_msg += f", 响应内容: {response.text}"
-                
-                # 对403错误进行特殊处理
-                if response.status_code == 403:
-                    error_msg += " (权限被拒绝，可能需要重新获取mt令牌)"
-                    # 403错误重试可能没有意义，直接抛出异常
-                    raise Exception(error_msg)
-                else:
-                    # 其他状态码可能是临时问题，可以重试
-                    raise Exception(error_msg)
+                raise Exception(error_msg)
             
-            # 尝试解析JSON
-            try:
-                json_data = json.loads(response.text)
-            except json.JSONDecodeError as e:
-                raise Exception(f"JSON解析错误: {str(e)}, 原始响应: {response.text}")
-                
             # 获取file_id
+            json_data = response.json()
             if not json_data.get('data') or not json_data['data'].get('fileId'):
                 raise Exception(f"响应中未找到file_id: {response.text}")
                 
             file_id = json_data['data']['fileId']
             logger.info(f"初始化上传成功，获取到file_id: {file_id}")
             
-            # 3. 处理分块上传 - 使用文件流式读取避免全部加载到内存
-            failed_chunks = []  # 记录失败的分块
-            from threading import Lock
+            # 3. 处理分块上传
+            num_chunks = (file_size // chunk_size) + (1 if file_size % chunk_size else 0)
+            logger.info(f"文件将被分为 {num_chunks} 个块上传")
             
-            # 创建线程安全的计数器
-            counter_lock = Lock()
-            successful_uploads = 0
-            failed_uploads = 0
+            # 创建任务队列和结果队列
+            task_queue = queue.Queue(maxsize=5)  # 限制队列大小更严格控制内存
+            result_queue = queue.Queue()
             
-            with open(file_path, 'rb') as file:
-                # 分块大小: 4MB
-                chunk_size = 4 * 1024 * 1024
-                
-                # 计算分块数量
-                num_chunks = (file_size // chunk_size) + (1 if file_size % chunk_size else 0)
-                logger.info(f"文件将被分为 {num_chunks} 个块上传")
-                
-                # 并行上传分块 - 适当限制并发数
-                max_workers = min(10, int(num_chunks))  # 最多10个线程
-                
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = []
-                    
-                    # 逐块读取和提交上传任务，避免一次性加载所有数据到内存
-                    for chunk_number in range(1, int(num_chunks) + 1):
-                        # 读取当前分块
-                        chunk_data = file.read(chunk_size)
-                        if not chunk_data:
+            # 创建停止标志
+            stop_event = threading.Event()
+            
+            # 定义生产者函数 - 读取文件块
+            def chunk_producer():
+                try:
+                    with open(file_path, 'rb') as file:
+                        for chunk_number in range(1, int(num_chunks) + 1):
+                            if stop_event.is_set():
+                                break
+                            # 读取当前分块
+                            chunk_data = file.read(chunk_size)
+                            if not chunk_data:
+                                break
+                            # 计算开始位置
+                            start_pos = (chunk_number - 1) * chunk_size
+                            # 放入队列
+                            task_queue.put((chunk_number, chunk_data, start_pos))
+                            logger.info(f"生产者: 已读取分块 {chunk_number}/{num_chunks}")
+                finally:
+                    # 添加结束标记
+                    for _ in range(max_workers):
+                        task_queue.put(None)
+                    logger.info("生产者: 所有分块已读取完成")
+            
+            # 定义消费者函数 - 上传分块
+            def chunk_consumer():
+                while not stop_event.is_set():
+                    try:
+                        # 从队列获取任务
+                        task = task_queue.get(timeout=60)  # 60秒超时
+                        if task is None:
+                            task_queue.task_done()
                             break
                             
-                        # 计算开始位置
-                        start_pos = (chunk_number - 1) * chunk_size
+                        chunk_number, chunk_data, start_pos = task
+                        logger.info(f"消费者: 开始上传分块 {chunk_number}/{num_chunks}")
                         
-                        # 直接提交上传任务
-                        future = executor.submit(
-                            _upload_chunk, 
-                            mt=mt, 
-                            file_id=file_id, 
-                            chunk_number=chunk_number, 
-                            chunk_data=chunk_data,  # 传递当前读取的数据
+                        # 上传分块
+                        success = _upload_chunk(
+                            mt=mt,
+                            file_id=file_id,
+                            chunk_number=chunk_number,
+                            chunk_data=chunk_data,
                             start_pos=start_pos,
                             total_chunks=num_chunks
                         )
-                        futures.append((future, chunk_number))
-                    
-                    # 处理所有上传结果
-                    for future, chunk_number in futures:
-                        try:
-                            result = future.result()
-                            with counter_lock:  # 使用锁保护计数器更新
-                                if result:
-                                    successful_uploads += 1
-                                    logger.info(f"分块 {chunk_number}/{num_chunks} 上传成功")
-                                else:
-                                    failed_uploads += 1
-                                    logger.error(f"分块 {chunk_number}/{num_chunks} 上传失败")
-                                    failed_chunks.append(chunk_number)
-                        except Exception as e:
-                            with counter_lock:  # 使用锁保护计数器更新
-                                failed_uploads += 1
-                            logger.error(f"分块 {chunk_number}/{num_chunks} 上传异常: {str(e)}")
+                        
+                        # 将结果放入结果队列
+                        result_queue.put((chunk_number, success))
+                        task_queue.task_done()
+                        logger.info(f"消费者: 完成分块 {chunk_number}/{num_chunks} 上传, 成功: {success}")
+                        
+                    except queue.Empty:
+                        logger.warning("消费者: 等待任务超时")
+                        continue
+                    except Exception as e:
+                        logger.error(f"消费者: 分块上传错误: {str(e)}")
+                        result_queue.put((chunk_number, False))
+                        task_queue.task_done()
+            
+            # 启动生产者线程
+            producer_thread = threading.Thread(target=chunk_producer)
+            producer_thread.daemon = True
+            producer_thread.start()
+            
+            # 启动消费者线程池
+            max_workers = min(8, int(num_chunks))  # 最多8个线程，降低内存占用
+            consumers = []
+            for _ in range(max_workers):
+                consumer = threading.Thread(target=chunk_consumer)
+                consumer.daemon = True
+                consumer.start()
+                consumers.append(consumer)
+            
+            # 等待所有分块上传完成
+            failed_chunks = []
+            completed_chunks = 0
+            
+            try:
+                while completed_chunks < num_chunks and not stop_event.is_set():
+                    try:
+                        chunk_number, success = result_queue.get(timeout=60)
+                        if not success:
                             failed_chunks.append(chunk_number)
-                
-                # 如果有失败的分块，则抛出异常并重试整个上传过程
-                if failed_chunks:
-                    raise Exception(f"有 {len(failed_chunks)} 个分块上传失败: {failed_chunks}")
-                
-                # 4. 完成上传
-                logger.info(f"所有分块上传完成，开始调用upload complete - file_id: {file_id}")
-                try:
-                    # 调用upload_complete函数，确保返回的file_id格式正确
-                    upload_complete(mt, file_id=file_id)
-                    logger.info(f"完成上传成功 - file_id: {file_id}")
-                    return file_id, file_name
-
-                except Exception as e:
-                    logger.error(f"完成上传失败 - 错误: {str(e)}")
-                    raise Exception(f"完成上传失败: {str(e)}")
-                
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-            # 网络连接问题或超时，适合重试
-            retry_count += 1
-            logger.warning(f"网络错误(尝试 {retry_count}/{max_retries}) - {str(e)}")
-            if retry_count >= max_retries:
-                logger.error(f"达到最大重试次数，放弃上传 - {file_name}")
-                raise Exception(f"视频上传失败(网络错误): {str(e)}")
+                        completed_chunks += 1
+                        result_queue.task_done()
+                        logger.info(f"主线程: 已完成 {completed_chunks}/{num_chunks} 个分块")
+                    except queue.Empty:
+                        logger.warning("主线程: 等待上传结果超时")
+                        continue
+            except KeyboardInterrupt:
+                logger.info("接收到中断信号，正在停止上传...")
+                stop_event.set()
+                raise
             
-            # 等待后重试
-            time.sleep(3)
+            # 等待所有线程完成
+            producer_thread.join(timeout=60)
+            for consumer in consumers:
+                consumer.join(timeout=60)
             
+            # 如果有失败的分块，抛出异常
+            if failed_chunks:
+                raise Exception(f"有 {len(failed_chunks)} 个分块上传失败: {failed_chunks}")
+            
+            # 4. 完成上传
+            logger.info(f"所有分块上传完成，开始调用upload complete - file_id: {file_id}")
+            upload_complete(mt, file_id=file_id)
+            logger.info(f"完成上传成功 - file_id: {file_id}")
+            return file_id, file_name
+                
         except Exception as e:
-            # 其他错误
             retry_count += 1
             logger.error(f"大文件上传失败(尝试 {retry_count}/{max_retries}) - {str(e)}")
             if retry_count >= max_retries:
@@ -1285,8 +1372,9 @@ def _upload_chunk(mt, file_id, chunk_number, chunk_data, start_pos, total_chunks
     - True: 上传成功
     - False: 上传失败
     """
-    max_retries = 2  # 分块上传重试次数
+    max_retries = 3  # 最大重试次数
     retry_count = 0
+    base_timeout = (30, 60)  # 基础超时时间(连接超时30秒，读写超时60秒)
     
     while retry_count <= max_retries:
         try:
@@ -1309,13 +1397,10 @@ def _upload_chunk(mt, file_id, chunk_number, chunk_data, start_pos, total_chunks
             
             # 打印分块上传请求参数
             logger.info(f"\n分块 {chunk_number}/{total_chunks} 上传请求:")
-            logger.info(f"URL: https://mass.alipay.com/file/multipart/upload/part")
-            logger.info(f"Headers: {json.dumps(headers, indent=2, ensure_ascii=False)}")
             logger.info(f"分块信息:")
             logger.info(f"  - 文件ID: {file_id}")
             logger.info(f"  - 分块大小: {human_readable_size(len(chunk_data))}")
             logger.info(f"  - 起始位置: {start_pos}")
-            logger.info(f"  - MT令牌: {mt}")
             
             # 上传分块
             files = {
@@ -1324,28 +1409,36 @@ def _upload_chunk(mt, file_id, chunk_number, chunk_data, start_pos, total_chunks
             
             # 使用会话以支持重试
             session = requests.Session()
-            adapter = requests.adapters.HTTPAdapter(max_retries=1)
+            adapter = requests.adapters.HTTPAdapter(
+                max_retries=1,
+                pool_connections=10,
+                pool_maxsize=10
+            )
             session.mount('https://', adapter)
+            
+            # 根据重试次数动态调整超时时间
+            current_timeout = (
+                base_timeout[0] * (retry_count + 1),  # 连接超时随重试次数增加
+                base_timeout[1] * (retry_count + 1)   # 读写超时随重试次数增加
+            )
             
             # 发送请求，设置适当的超时
             try:
+                logger.info(f"开始上传分块 {chunk_number}/{total_chunks}, 超时设置: 连接{current_timeout[0]}秒, 读写{current_timeout[1]}秒")
                 response = session.post(
                     'https://mass.alipay.com/file/multipart/upload/part', 
                     headers=headers, 
                     files=files, 
-                    timeout=(15, 120)  # (连接超时, 读取超时)
+                    timeout=current_timeout
                 )
                 
                 # 打印完整响应内容
                 logger.info(f"\n分块 {chunk_number}/{total_chunks} 上传响应:")
                 logger.info(f"状态码: {response.status_code}")
-                logger.info(f"响应头: {json.dumps(dict(response.headers), indent=2, ensure_ascii=False)}")
-                try:
-                    response_json = response.json()
-                    logger.info(f"响应内容: {json.dumps(response_json, indent=2, ensure_ascii=False)}")
-                except:
-                    logger.info(f"响应内容: {response.text}")
                 
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                logger.warning(f"分块 {chunk_number}/{total_chunks} - 网络错误: {str(e)}")
+                raise  # 抛出异常以进入重试逻辑
             finally:
                 # 确保会话被关闭
                 session.close()
@@ -1371,39 +1464,46 @@ def _upload_chunk(mt, file_id, chunk_number, chunk_data, start_pos, total_chunks
                     raise Exception(error_msg)
                     
                 # 上传成功
+                logger.info(f"分块 {chunk_number}/{total_chunks} 上传成功")
                 return True
+                
             except json.JSONDecodeError as e:
                 raise Exception(f"解析响应JSON失败: {str(e)}")
                 
-        except requests.exceptions.ConnectionError as e:
-            # 网络连接问题，适合重试
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             retry_count += 1
-            logger.warning(f"分块 {chunk_number}/{total_chunks} - 连接错误(尝试 {retry_count}/{max_retries}): {str(e)}")
-            
-        except requests.exceptions.Timeout as e:
-            # 超时问题，适合重试
-            retry_count += 1
-            logger.warning(f"分块 {chunk_number}/{total_chunks} - 请求超时(尝试 {retry_count}/{max_retries}): {str(e)}")
+            if retry_count > max_retries:
+                logger.error(f"分块 {chunk_number}/{total_chunks} - 达到最大重试次数")
+                return False
+                
+            # 使用指数退避策略计算等待时间
+            wait_time = min(60, (2 ** retry_count) + random.uniform(0, 1))
+            logger.warning(f"分块 {chunk_number}/{total_chunks} - 网络错误(尝试 {retry_count}/{max_retries})")
+            logger.warning(f"错误详情: {str(e)}")
+            logger.warning(f"等待 {wait_time:.1f} 秒后重试...")
+            time.sleep(wait_time)
             
         except requests.exceptions.HTTPError as e:
-            # HTTP错误，视状态码决定是否重试
             retry_count += 1
+            if retry_count > max_retries:
+                logger.error(f"分块 {chunk_number}/{total_chunks} - 达到最大重试次数")
+                return False
+                
+            wait_time = min(60, retry_count * 5)
             logger.warning(f"分块 {chunk_number}/{total_chunks} - HTTP错误(尝试 {retry_count}/{max_retries}): {str(e)}")
+            logger.warning(f"等待 {wait_time} 秒后重试...")
+            time.sleep(wait_time)
             
         except Exception as e:
-            # 其他未预期的错误
             retry_count += 1
+            if retry_count > max_retries:
+                logger.error(f"分块 {chunk_number}/{total_chunks} - 达到最大重试次数")
+                return False
+                
+            wait_time = min(60, retry_count * 5)
             logger.error(f"分块 {chunk_number}/{total_chunks} - 未知错误(尝试 {retry_count}/{max_retries}): {str(e)}")
-        
-        # 判断是否达到最大重试次数
-        if retry_count > max_retries:
-            logger.error(f"分块 {chunk_number}/{total_chunks} - 达到最大重试次数")
-            return False
-            
-        # 等待后重试，使用递增的等待时间
-        wait_time = 2 * retry_count
-        logger.info(f"分块 {chunk_number}/{total_chunks} - 等待 {wait_time} 秒后重试")
-        time.sleep(wait_time)
+            logger.warning(f"等待 {wait_time} 秒后重试...")
+            time.sleep(wait_time)
     
     # 不应该到达这里，但为了安全
     return False
@@ -1443,7 +1543,7 @@ def upload_pic(cookies, video_file_path):
         return json.loads(response.text).get('extProperty')
 
 
-def get_video_url(file_id, mt, max_retries=60, retry_interval=3):  # 60次 * 10秒 = 10分钟
+def get_video_url(file_id, mt, max_retries=60, retry_interval=1):  # 60次 * 10秒 = 10分钟
     """
     获取视频URL，10分钟内每10秒重试一次
     """
@@ -2189,11 +2289,21 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
             # 上传视频文件
             logger.info(f"开始上传视频: {video_name}")
             file_id = None
-            if file_size <= 4 * 1024 * 1024:  # 4MB
-                file_id,file_name = upload_4m_video(mt, file_path)
-            else:
-                file_id,file_name = upload_large_video(mt, file_path, file_size)
-
+            
+            try:
+                # 根据文件大小选择上传方式
+                if file_size <= 4 * 1024 * 1024:  # 4MB
+                    logger.info(f"上传小文件 - {file_path}")
+                    file_id, video_name = upload_4m_video(mt, file_path)
+                else:
+                    logger.info(f"上传大文件 - {file_path}, 大小: {file_size/1024/1024:.2f}MB")
+                    file_id, video_name = upload_large_video(mt, file_path, file_size)
+            finally:
+                # 强制内存回收，清理大文件占用的内存
+                import gc
+                gc.collect()
+                logger.debug("已执行内存回收")
+                
             if not file_id:
                 logger.error(f"视频上传失败: {video_name}")
                 return None, None, None, None, None
@@ -2239,6 +2349,7 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
 
         except Exception as e:
             logger.error(f"上传视频时发生错误: {str(e)}")
+            logger.error(f"完整堆栈跟踪:\n{traceback.format_exc()}")
             return None, None, None, None, None
     
     # 使用线程池进行并发上传
@@ -2256,6 +2367,7 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
                     # 成功的情况已经在upload_video中更新了计数器
                 except Exception as e:
                     logger.error(f"上传任务执行出错: {str(e)}")
+                    logger.error(f"完整堆栈跟踪:\n{traceback.format_exc()}")
                     update_stats(upload_counter, failed=1, processed=1)
             
             # 设置上传完成标志
@@ -2271,6 +2383,7 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
                     publish_queue.join()
                 except Exception as e:
                     logger.error(f"等待发布队列完成时出错: {str(e)}")
+                    logger.error(f"完整堆栈跟踪:\n{traceback.format_exc()}")
     
     except (KeyboardInterrupt, SystemExit):
         logger.info("接收到终止信号，正在停止所有任务...")

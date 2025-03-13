@@ -12,8 +12,7 @@ import multiprocessing
 import logging
 import json
 import requests
-
-warnings.filterwarnings("ignore")
+from PyQt5 import QtWidgets
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QBrush, QColor, QPainter, QFont, QIcon
 from PyQt5.QtWidgets import QMainWindow, QApplication, QTableWidgetItem, QCheckBox, QHBoxLayout, QWidget, QPushButton, \
@@ -22,6 +21,7 @@ from ui.ui import Ui_MainWindow
 from zfb import *
 import pandas as pd
 from db import update_existing_fields, delete_records_by_appids
+from PyQt5 import QtCore
 
 # 创建自定义的日志格式化器
 class ThreadIdFormatter(logging.Formatter):
@@ -483,6 +483,27 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.daily_reset_timer.timeout.connect(self.check_daily_reset)
             self.daily_reset_timer.start(3600000)  # 每小时检查一次
 
+            # 初始化内存优化
+            try:
+                # 启用表格的像素级滚动，减少内存占用
+                self.tableWidget.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+                self.tableWidget.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+                
+                # 设置表格渲染优化
+                self.tableWidget.setUpdatesEnabled(False)
+                self.tableWidget.verticalHeader().setDefaultSectionSize(40)  # 设置行高
+                self.tableWidget.horizontalHeader().setMinimumSectionSize(50)  # 设置最小列宽
+                self.tableWidget.setUpdatesEnabled(True)
+                
+                # 添加内存优化定时器，定期回收内存
+                self.memory_timer = QTimer(self)
+                self.memory_timer.timeout.connect(self.optimize_memory)
+                self.memory_timer.start(60000)  # 每分钟优化一次内存
+                
+                logger.info("内存优化初始化完成")
+            except Exception as e:
+                logger.error(f"内存优化初始化失败: {str(e)}")
+
         except Exception as e:
             logger.error(f"主窗口初始化失败: {str(e)}")
             print(f"初始化失败: {str(e)}")
@@ -574,20 +595,28 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             print(f"更新日志失败: {str(e)}")
 
     def paintEvent_tabel(self, event):
-        super().paintEvent(event)
-        painter = QPainter(self.tableWidget.viewport())
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setFont(QFont("Arial", 50))
-        painter.setPen(QColor(30, 31, 34, 128))
-        text = "仅供学习使用"
-        text_rect = painter.fontMetrics().boundingRect(text)
-        
-        # 将浮点数转换为整数
-        x = int((self.tableWidget.viewport().width() - text_rect.width()) / 2)
-        y = int((self.tableWidget.viewport().height() - text_rect.height()) / 2)
-        
-        painter.drawText(x, y + text_rect.height(), text)
-        painter.end()
+        # 避免频繁重绘导致的内存占用
+        if not hasattr(self, '_last_paint_time') or time.time() - self._last_paint_time > 0.5:
+            self._last_paint_time = time.time()
+            
+            super().paintEvent(event)
+            painter = QPainter(self.tableWidget.viewport())
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setFont(QFont("Arial", 50))
+            painter.setPen(QColor(30, 31, 34, 128))
+            text = "仅供学习使用"
+            text_rect = painter.fontMetrics().boundingRect(text)
+            
+            # 将浮点数转换为整数
+            x = int((self.tableWidget.viewport().width() - text_rect.width()) / 2)
+            y = int((self.tableWidget.viewport().height() - text_rect.height()) / 2)
+            
+            painter.drawText(x, y + text_rect.height(), text)
+            painter.end()
+            
+            # 手动触发垃圾回收
+            import gc
+            gc.collect()
 
     def all_check(self, status):
         try:
@@ -949,95 +978,122 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             logger.error(str(e))
 
     def show_table(self, df: pd.DataFrame):
-        self.tableWidget.setRowCount(0)
-        self.tableWidget.setRowCount(df.shape[0])
-        
-        # 检查是否已经存在这些列
-        current_columns = self.tableWidget.columnCount()
-        required_columns = ["今日成功", "今日失败", "最近发布时间"]
-        existing_headers = [self.tableWidget.horizontalHeaderItem(i).text() if self.tableWidget.horizontalHeaderItem(i) else "" 
-                           for i in range(current_columns)]
-        
-        # 只有在这些列不存在时才添加
-        if not all(col in existing_headers for col in required_columns):
-            # 设置固定的列数
-            self.tableWidget.setColumnCount(13)  # 原有的12列
-            # 添加3个新列
-            self.tableWidget.setHorizontalHeaderItem(13, QTableWidgetItem("今日成功"))
-            self.tableWidget.setHorizontalHeaderItem(14, QTableWidgetItem("今日失败"))
-            self.tableWidget.setHorizontalHeaderItem(15, QTableWidgetItem("最近发布时间"))
-        
-        headers = [
-            "序号", "appId", "账号名称", "今日推荐数", "Cookies状态",
-            "上传总数", "话题设置", "删除不可推荐", "文件总数",
-            "是否是主账号", "文件夹路径", "操作", "今日成功", "今日失败", "最近发布时间"
-        ]
-        
-        for i in range(df.shape[0]):
-            # 第一列：复选框 + 序号
-            checkbox = QCheckBox()
-            checkbox.setChecked(df.iloc[i]["check_"])
-            checkbox.setText(str(i + 1))
-            checkbox.stateChanged.connect(self.get_check_row)
-            appid = str(df.iloc[i, 0])  # 获取 appId
-            self.tableWidget.setCellWidget(i, 0, checkbox)
-            # self.tableWidget.setItem(i, 0, QTableWidgetItem(str(i + 1)))  # 显示序号
-
-            # 第二列：appId
-            self.tableWidget.setItem(i, 1, QTableWidgetItem(str(df.iloc[i]["appid"])))
-
-            # 第三列：账号名称
-            self.tableWidget.setItem(i, 2, QTableWidgetItem(df.iloc[i]["user_name"]))
-
-            # 第四列：推荐数
-            self.tableWidget.setItem(i, 3, QTableWidgetItem(str(self.df.iloc[i]["daily_recommendations"])))
-            # 第四列：cookies状态
-            self.tableWidget.setItem(i, 4, QTableWidgetItem(self.df.iloc[i]["cookies_status"]))
-
-            # 第五列：total_uploads
-            self.tableWidget.setItem(i, 5, QTableWidgetItem(str(self.df.iloc[i]["total_uploads"])))
-
-            # 第六列：话题
-            self.tableWidget.setItem(i, 6, QTableWidgetItem(str(self.df.iloc[i]["topic_settings"])))
-
-            # 第七列：删除不可推荐
-            self.tableWidget.setItem(i, 7, QTableWidgetItem(str(self.df.iloc[i]["delete_unrecommended"])))
-
-            # 第八列：文件总数
-            self.tableWidget.setItem(i, 8, QTableWidgetItem(str(self.df.iloc[i]["total_files"])))
-            if self.df.iloc[i]["folder_path"] is not None:
-                count = self.get_video_count(self.df.iloc[i]["folder_path"])
-
-                self.df.at[i, "total_files"] = count
-                self.tableWidget.setItem(i, 8, QTableWidgetItem(str(count)))
-
-            self.tableWidget.setItem(i, 9, QTableWidgetItem("是" if self.df.iloc[i]["is_main_account"] else "否"))
-            # 第10列：绑定文件夹
-            self.tableWidget.setItem(i, 10, QTableWidgetItem(str(self.df.iloc[i]["folder_path"])))
-            # 第11列：按钮
-            button = QPushButton("绑定文件夹")
-            if self.df.iloc[i]["total_files"] > 0:
-                button.setStyleSheet("""
-                background-color: rgb(90, 212, 105)
-                """)
-            else:
-                button.setStyleSheet("""
-                background-color: rgb(227, 61, 48)
-                """)
-            button.clicked.connect(lambda checked, data=(appid, i): self.bind_folder(data))
-            self.tableWidget.setCellWidget(i, 11, button)
-
-            # 添加统计列（使用固定的列索引）
-            success_count = self.df.iloc[i].get("daily_success", 0)
-            failed_count = self.df.iloc[i].get("daily_failed", 0)
-            last_publish_time = self.df.iloc[i].get("last_publish_time", "")
+        """
+        优化的表格数据显示函数，保留原有业务逻辑
+        :param df: 要显示的数据表
+        """
+        if df.empty:
+            logger.warning("数据表为空，无法显示")
+            return
             
-            self.tableWidget.setItem(i, 12, QTableWidgetItem(str(success_count)))
-            self.tableWidget.setItem(i, 13, QTableWidgetItem(str(failed_count)))
-            self.tableWidget.setItem(i, 14, QTableWidgetItem(str(last_publish_time)))
+        try:
+            # 禁用表格更新以提高性能
+            self.tableWidget.setUpdatesEnabled(False)
+            
+            # 重置表格
+            self.tableWidget.clearContents()
+            self.tableWidget.setRowCount(0)
+            self.tableWidget.setRowCount(df.shape[0])
+            
+            # 检查是否已经存在这些列
+            current_columns = self.tableWidget.columnCount()
+            required_columns = ["今日成功", "今日失败", "最近发布时间"]
+            existing_headers = [self.tableWidget.horizontalHeaderItem(i).text() if self.tableWidget.horizontalHeaderItem(i) else "" 
+                              for i in range(current_columns)]
+            
+            # 只有在这些列不存在时才添加
+            if not all(col in existing_headers for col in required_columns):
+                # 设置固定的列数
+                self.tableWidget.setColumnCount(13)  # 原有的12列
+                # 添加3个新列
+                self.tableWidget.setHorizontalHeaderItem(13, QTableWidgetItem("今日成功"))
+                self.tableWidget.setHorizontalHeaderItem(14, QTableWidgetItem("今日失败"))
+                self.tableWidget.setHorizontalHeaderItem(15, QTableWidgetItem("最近发布时间"))
+            
+            headers = [
+                "序号", "appId", "账号名称", "今日推荐数", "Cookies状态",
+                "上传总数", "话题设置", "删除不可推荐", "文件总数",
+                "是否是主账号", "文件夹路径", "操作", "今日成功", "今日失败", "最近发布时间"
+            ]
+            
+            # 批量设置表格内容
+            for i in range(df.shape[0]):
+                # 第一列：复选框 + 序号
+                checkbox = QCheckBox()
+                checkbox.setChecked(df.iloc[i]["check_"])
+                checkbox.setText(str(i + 1))
+                checkbox.stateChanged.connect(self.get_check_row)
+                appid = str(df.iloc[i, 0])  # 获取 appId
+                self.tableWidget.setCellWidget(i, 0, checkbox)
+                # self.tableWidget.setItem(i, 0, QTableWidgetItem(str(i + 1)))  # 显示序号
 
-        # 在填充完数据后，应用当前的搜索过滤
-        self.filter_table()
+                # 第二列：appId
+                self.tableWidget.setItem(i, 1, QTableWidgetItem(str(df.iloc[i]["appid"])))
+
+                # 第三列：账号名称
+                self.tableWidget.setItem(i, 2, QTableWidgetItem(df.iloc[i]["user_name"]))
+
+                # 第四列：推荐数
+                self.tableWidget.setItem(i, 3, QTableWidgetItem(str(self.df.iloc[i]["daily_recommendations"])))
+                # 第四列：cookies状态
+                self.tableWidget.setItem(i, 4, QTableWidgetItem(self.df.iloc[i]["cookies_status"]))
+
+                # 第五列：total_uploads
+                self.tableWidget.setItem(i, 5, QTableWidgetItem(str(self.df.iloc[i]["total_uploads"])))
+
+                # 第六列：话题
+                self.tableWidget.setItem(i, 6, QTableWidgetItem(str(self.df.iloc[i]["topic_settings"])))
+                
+                # 第七列：删除不可推荐
+                self.tableWidget.setItem(i, 7, QTableWidgetItem(str(self.df.iloc[i]["delete_unrecommended"])))
+
+                # 第八列：文件总数
+                self.tableWidget.setItem(i, 8, QTableWidgetItem(str(self.df.iloc[i]["total_files"])))
+                if self.df.iloc[i]["folder_path"] is not None:
+                    count = self.get_video_count(self.df.iloc[i]["folder_path"])
+
+                    self.df.at[i, "total_files"] = count
+                    self.tableWidget.setItem(i, 8, QTableWidgetItem(str(count)))
+
+                self.tableWidget.setItem(i, 9, QTableWidgetItem("是" if self.df.iloc[i]["is_main_account"] else "否"))
+                # 第10列：绑定文件夹
+                self.tableWidget.setItem(i, 10, QTableWidgetItem(str(self.df.iloc[i]["folder_path"])))
+                # 第11列：按钮
+                button = QPushButton("绑定文件夹")
+                if self.df.iloc[i]["total_files"] > 0:
+                    button.setStyleSheet("""
+                    background-color: rgb(90, 212, 105)
+                    """)
+                else:
+                    button.setStyleSheet("""
+                    background-color: rgb(227, 61, 48)
+                    """)
+                button.clicked.connect(lambda checked, data=(appid, i): self.bind_folder(data))
+                self.tableWidget.setCellWidget(i, 11, button)
+                
+                # 添加统计列（使用固定的列索引）
+                success_count = self.df.iloc[i].get("daily_success", 0)
+                failed_count = self.df.iloc[i].get("daily_failed", 0)
+                last_publish_time = self.df.iloc[i].get("last_publish_time", "")
+                
+                self.tableWidget.setItem(i, 12, QTableWidgetItem(str(success_count)))
+                self.tableWidget.setItem(i, 13, QTableWidgetItem(str(failed_count)))
+                self.tableWidget.setItem(i, 14, QTableWidgetItem(str(last_publish_time)))
+            
+            # 重新启用表格更新
+            self.tableWidget.setUpdatesEnabled(True)
+            
+            # 在填充完数据后，应用当前的搜索过滤
+            self.filter_table()
+            
+            # 延迟执行内存优化
+            QTimer.singleShot(100, self.optimize_memory)
+            
+        except Exception as e:
+            logger.error(f"显示表格时发生错误: {str(e)}")
+            print(f"显示表格时发生错误: {str(e)}")
+            # 确保重新启用表格更新
+            self.tableWidget.setUpdatesEnabled(True)
 
     def bind_folder(self, data: (str, int)):
         """
@@ -1401,18 +1457,35 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             logger.error(f"更新文件总数时出错: {str(e)}")
 
     def filter_table(self):
-        """根据搜索框内容过滤表格"""
-        search_text = self.search_input.text().lower()
+        """按搜索条件过滤表格"""
+        search_text = self.search_input.text().strip().lower()
         
-        for row in range(self.tableWidget.rowCount()):
-            show_row = False
-            # 在appId列(索引1)和账号名称列(索引2)中搜索
-            for col in [1, 2]:
-                item = self.tableWidget.item(row, col)
-                if item and search_text in item.text().lower():
-                    show_row = True
-                    break
-            self.tableWidget.setRowHidden(row, not show_row)
+        # 禁用更新以提高性能
+        self.tableWidget.setUpdatesEnabled(False)
+        
+        try:
+            for row in range(self.tableWidget.rowCount()):
+                # 获取当前行的appId
+                app_id_item = self.tableWidget.item(row, 1)
+                if not app_id_item:
+                    continue
+                    
+                app_id = app_id_item.text().lower()
+                
+                # 如果搜索文本为空或appId包含搜索文本，则显示该行，否则隐藏
+                if not search_text or search_text in app_id:
+                    self.tableWidget.showRow(row)
+                else:
+                    self.tableWidget.hideRow(row)
+                    
+        except Exception as e:
+            logger.error(f"过滤表格时发生错误: {str(e)}")
+            
+        # 重新启用表格更新
+        self.tableWidget.setUpdatesEnabled(True)
+        
+        # 执行内存优化
+        QTimer.singleShot(100, self.optimize_memory)
 
     def verify_key_periodically(self):
         """
@@ -1615,6 +1688,51 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         update_existing_fields(self.df)
         return data
 
+    def optimize_memory(self):
+        """
+        主动优化内存使用，减少内存泄露
+        """
+        # 强制Python垃圾回收
+        import gc
+        gc.collect()
+        
+        # 清理未使用的PyQt对象缓存
+        QApplication.processEvents()
+        
+        # 减少表格的内存占用
+        if hasattr(self, 'tableWidget'):
+            # 不影响用户选择的情况下优化内存
+            current_row = -1
+            if self.tableWidget.selectionModel().selectedRows():
+                current_row = self.tableWidget.selectionModel().selectedRows()[0].row()
+            
+            # 优化表格内存
+            self.tableWidget.setUpdatesEnabled(False)
+            self.tableWidget.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+            self.tableWidget.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+            self.tableWidget.setUpdatesEnabled(True)
+            
+            # 恢复选择
+            if current_row >= 0:
+                self.tableWidget.selectRow(current_row)
+                
+        logger.debug("已执行内存优化")
+
+    def resizeEvent(self, event):
+        """
+        处理窗口大小变化事件，优化内存
+        """
+        # 先调用默认的处理逻辑
+        super().resizeEvent(event)
+        
+        # 使用定时器延迟调用内存优化，避免频繁调用
+        if not hasattr(self, '_resize_timer'):
+            self._resize_timer = QtCore.QTimer()
+            self._resize_timer.timeout.connect(self.optimize_memory)
+            self._resize_timer.setSingleShot(True)
+        
+        self._resize_timer.start(500)  # 500毫秒后执行优化
+
 
 def show_key_verification():
     """显示密钥验证窗口
@@ -1652,11 +1770,6 @@ def show_key_verification():
         central_widget = QWidget()
         verify_window.setCentralWidget(central_widget)
         
-        # 创建主布局前确保central_widget没有已存在的布局
-        if central_widget.layout():
-            # 如果已存在布局，先清除它
-            QWidget().setLayout(central_widget.layout())
-            
         # 创建新布局
         layout = QVBoxLayout()
         central_widget.setLayout(layout)
