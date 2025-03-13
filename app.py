@@ -352,6 +352,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             if os.path.exists(self.log_file_path):
                 self.current_offset = len(open(self.log_file_path, "r", encoding="utf-8").readlines())
 
+            # 初始化定时器 - 确保在早期初始化
+            self.timer_db = QTimer(self)
+            self.timer_db.timeout.connect(self.update_log)
+            self.keep_login_timer = QTimer(self)
+            self.keep_login_timer.timeout.connect(self.keep_login)
+            
             self.setupUi(self)
             
             # 设置窗口图标
@@ -503,6 +509,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 logger.info("内存优化初始化完成")
             except Exception as e:
                 logger.error(f"内存优化初始化失败: {str(e)}")
+
+            # 初始化登录保持定时器（10分钟 = 600000毫秒）
+            self.keep_login_timer = QTimer(self)
+            self.keep_login_timer.timeout.connect(self.keep_login)
+            
+            # 连接复选框信号
+            self.checkBox.stateChanged.connect(self.toggle_keep_login)
 
         except Exception as e:
             logger.error(f"主窗口初始化失败: {str(e)}")
@@ -659,13 +672,44 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             QMessageBox.warning(self, "错误", f"停止任务失败: {str(e)}")
 
     def timer_login_start(self):
+        """
+        根据复选框状态启动或停止登录保持定时器
+        """
         try:
+            if not hasattr(self, 'keep_login_timer'):
+                logger.error("登录保持定时器未初始化")
+                self.keep_login_timer = QTimer(self)
+                self.keep_login_timer.timeout.connect(self.keep_login)
+                
             if self.checkBox.isChecked():
-                self.timer_login.start(300000)
+                logger.info("启动登录保持定时器，间隔为10分钟")
+                self.keep_login_timer.setInterval(600000)  # 10分钟 = 600000毫秒
+                self.keep_login_timer.start()
             else:
-                self.timer_login.stop()
+                logger.info("停止登录保持定时器")
+                self.keep_login_timer.stop()
         except Exception as e:
-            print("timer_login_start", e)
+            logger.error(f"登录保持定时器设置失败: {str(e)}")
+            QMessageBox.warning(self, "警告", f"登录保持定时器设置失败: {str(e)}")
+            
+    def toggle_keep_login(self):
+        """
+        切换保持登录状态
+        """
+        try:
+            if not hasattr(self, 'keep_login_timer'):
+                logger.error("登录保持定时器未初始化")
+                self.keep_login_timer = QTimer(self)
+                self.keep_login_timer.timeout.connect(self.keep_login)
+                
+            self.keep_login_timer.setInterval(600000 if self.checkBox.isChecked() else 0)
+            if self.checkBox.isChecked():
+                self.keep_login_timer.start()
+            else:
+                self.keep_login_timer.stop()
+        except Exception as e:
+            logger.error(f"切换保持登录状态失败: {str(e)}")
+            QMessageBox.warning(self, "警告", f"切换保持登录状态失败: {str(e)}")
 
     def request_all(self):
         try:
@@ -958,15 +1002,20 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.tableWidget.setItem(i, 4, item)
 
     def init_ui(self):
-        """从数据库读取并显示数据"""
+        """初始化界面"""
         try:
-            # 使用长连接读取数据
-            self.df = pd.read_sql("select * from user_data", self.conn)
-            self.df['cookies_dict'] = self.df['cookies'].apply(json.loads)
-            self.show_table(self.df)
+            logger.info("初始化界面...")
+            self.init_check_box()
+            self.init_tags()
+            self.init_account_table()
+            
+            # 初始化登录保持定时器
+            self.timer_login_start()
+            
+            logger.info("界面初始化完成")
         except Exception as e:
-            logger.error(f"初始化UI失败: {str(e)}")
-            print(f"初始化UI失败: {str(e)}")
+            logger.error(f"界面初始化失败: {str(e)}")
+            QMessageBox.warning(self, "错误", f"界面初始化失败: {str(e)}")
 
     def login(self):
         try:
@@ -1732,6 +1781,79 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self._resize_timer.setSingleShot(True)
         
         self._resize_timer.start(500)  # 500毫秒后执行优化
+
+    def keep_login(self):
+        """
+        保持登录状态 - 调用get_public_list函数
+        """
+        try:
+            # 检查是否有选中的行
+            checked_rows = self.get_check_row()
+            if not checked_rows or len(checked_rows) == 0:
+                logger.info("没有选中的账号，跳过保持登录")
+                return
+                
+            logger.info("执行保持登录状态")
+            self.thread.model = 2
+            df = self.get_df()
+            data = self.get_check_row()
+            df = df.loc[data]
+            self.thread.df = df
+            
+            # 记录状态但不更新UI
+            self.thread.start()
+            logger.info(f"已启动保持登录任务，共 {len(df)} 个账号")
+        except Exception as e:
+            logger.error(f"保持登录状态失败: {str(e)}")
+            # 不显示消息框，避免弹窗干扰用户
+
+    def init_check_box(self):
+        """初始化复选框状态"""
+        try:
+            # 默认不勾选
+            self.checkBox.setChecked(False)
+            
+            # 确保连接信号
+            try:
+                self.checkBox.stateChanged.disconnect(self.toggle_keep_login)
+            except:
+                pass  # 如果之前没有连接，会抛出异常，忽略即可
+                
+            self.checkBox.stateChanged.connect(self.toggle_keep_login)
+            
+            # 确保定时器初始化
+            if not hasattr(self, 'keep_login_timer'):
+                self.keep_login_timer = QTimer(self)
+                self.keep_login_timer.timeout.connect(self.keep_login)
+                
+            logger.info("复选框状态初始化完成")
+        except Exception as e:
+            logger.error(f"初始化复选框状态失败: {str(e)}")
+            # 不显示消息框，避免启动时弹窗
+    
+    def init_tags(self):
+        """初始化话题标签"""
+        try:
+            # 从数据库读取话题标签
+            if hasattr(self, 'conn'):
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT tags FROM settings WHERE id=1")
+                result = cursor.fetchone()
+                if result and result[0]:
+                    self.lineEdit_2.setText(result[0])
+        except Exception as e:
+            logger.error(f"初始化话题标签失败: {str(e)}")
+    
+    def init_account_table(self):
+        """初始化账号表格"""
+        try:
+            # 使用长连接读取数据
+            self.df = pd.read_sql("select * from user_data", self.conn)
+            self.df['cookies_dict'] = self.df['cookies'].apply(json.loads)
+            self.show_table(self.df)
+        except Exception as e:
+            logger.error(f"初始化账号表格失败: {str(e)}")
+            print(f"初始化账号表格失败: {str(e)}")
 
 
 def show_key_verification():

@@ -1770,12 +1770,6 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
         try:
             logger.info(f"发布视频尝试 {retry+1}/{max_retries}")
             
-            # 打印请求参数
-            logger.info("发布视频请求参数:")
-            logger.info(f"URL: https://contentweb.alipay.com/life/publishShortVideo.json")
-            logger.info(f"Params: {json.dumps(params, indent=2, ensure_ascii=False)}")
-            logger.info(f"Headers: {json.dumps(headers, indent=2, ensure_ascii=False)}")
-            logger.info(f"JSON数据: {json.dumps(json_data, indent=2, ensure_ascii=False)}")
             
             # 使用会话发送请求
             response = session.post(
@@ -1785,11 +1779,7 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
                 json=json_data,
                 timeout=30  # 设置30秒超时
             )
-            
-            # 打印响应信息
-            logger.info(f"发布响应状态码: {response.status_code}")
-            logger.info(f"发布响应头: {json.dumps(dict(response.headers), indent=2, ensure_ascii=False)}")
-            logger.info(f"发布响应内容: {response.text}")
+        
             
             # 检查HTTP状态码
             if response.status_code != 200:
