@@ -21,6 +21,7 @@ import shutil
 from PIL import Image
 import queue
 import traceback
+import uuid
 
 
 # 在文件开头添加线程控制类
@@ -1623,7 +1624,7 @@ def format_time_string(time_str):
     return formatted_time
 
 def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None, extProperty=None, mt=None,
-          scheduleTime=None, title=None, cookies=None, topic_info=None):
+          scheduleTime=None, title=None, cookies=None, topic_info=None, trace_id=None):
     """
     发布视频
     
@@ -1638,10 +1639,15 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
         title: 视频标题
         cookies: Cookie
         topic_info: 话题信息，格式为 [[名称,权重], ...]
+        trace_id: 追踪ID
         
     返回:
         字典，包含发布结果
     """
+    # 更新发布状态为发布中
+    if trace_id:
+        publish_monitor.update_publish_status(trace_id, 'publishing')
+    
     # 最大重试次数和等待时间
     max_retries = 5
     retry_intervals = [5, 10, 15, 30, 60]  # 重试等待时间逐渐增加
@@ -1651,7 +1657,7 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
     if isinstance(videoId, tuple) and len(videoId) > 0:
         videoId = videoId[0]
         logger.info(f"videoId是元组，提取第一个元素: {videoId}, 原始值: {original_video_id}")
-        
+    
     # 处理title参数
     if title is None or title == "":
         title = "无标题视频"
@@ -1672,7 +1678,7 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
         'sec-fetch-site': 'same-site',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     }
-
+    
     # 添加params参数
     params = {
         'loginPublicId': loginPublicId,
@@ -1755,6 +1761,8 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
                     session.cookies.set(key, value)
             except json.JSONDecodeError:
                 logger.error(f"无法解析cookies字符串: {cookies}")
+                if trace_id:
+                    publish_monitor.update_publish_status(trace_id, 'failed', "无效的cookies格式")
                 return {"success": False, "error": "无效的cookies格式"}
     
     # 重试机制
@@ -1794,6 +1802,8 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
                     continue
                     
                 # 对其他错误直接返回失败结果
+                if trace_id:
+                    publish_monitor.update_publish_status(trace_id, 'failed', error_msg)
                 return {"success": False, "error": error_msg}
             
             # 解析JSON响应
@@ -1806,6 +1816,8 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
                     logger.warning(f"将在 {retry_intervals[retry]} 秒后重试")
                     time.sleep(retry_intervals[retry])
                     continue
+                if trace_id:
+                    publish_monitor.update_publish_status(trace_id, 'failed', f"解析响应JSON失败: {str(e)}")
                 return {"success": False, "error": f"解析发布响应失败: {str(e)}"}
             
             # 处理结果
@@ -1815,6 +1827,11 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
                 # 直接使用result字符串作为发布ID
                 publish_id = result.get('result')
                 logger.info(f"发布成功，publish_id: {publish_id}")
+                
+                # 更新发布状态为成功
+                if trace_id:
+                    publish_monitor.update_publish_status(trace_id, 'success')
+                    
                 return {"success": True, "publish_id": publish_id}
             else:
                 error_msg = result.get('message', '未知错误')
@@ -1822,7 +1839,9 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
                 # 处理特定错误类型
                 if "已经发布过" in error_msg:
                     logger.warning(f"视频已发布过: {error_msg}")
-                    return {"success": False, "error": error_msg, "duplicate": True}
+                    if trace_id:
+                        publish_monitor.update_publish_status(trace_id, 'success')
+                    return {"success": True, "message": "视频已发布"}
                 
                 # 判断是否需要重试
                 if retry < max_retries - 1 and ("服务器忙" in error_msg or "临时服务不可用" in error_msg):
@@ -1830,8 +1849,12 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
                     time.sleep(retry_intervals[retry])
                     continue
                 
+                # 更新发布状态为失败
+                if trace_id:
+                    publish_monitor.update_publish_status(trace_id, 'failed', error_msg)
+                    
                 return {"success": False, "error": error_msg}
-                
+            
         except requests.exceptions.RequestException as e:
             logger.error(f"发布请求异常: {str(e)}")
             
@@ -1840,6 +1863,10 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
                 logger.warning(f"将在 {retry_intervals[retry]} 秒后重试")
                 time.sleep(retry_intervals[retry])
                 continue
+                
+            # 更新发布状态为失败
+            if trace_id:
+                publish_monitor.update_publish_status(trace_id, 'failed', f"发布请求异常: {str(e)}")
                 
             return {"success": False, "error": f"发布请求异常: {str(e)}"}
             
@@ -1854,9 +1881,15 @@ def publish(loginPublicId=None, videoId=None, videoFile=None, videoFileName=None
                 time.sleep(retry_intervals[retry])
                 continue
                 
+            # 更新发布状态为失败
+            if trace_id:
+                publish_monitor.update_publish_status(trace_id, 'failed', f"发布时出现意外错误: {str(e)}")
+                
             return {"success": False, "error": f"发布时出现意外错误: {str(e)}"}
     
     # 如果所有重试都失败
+    if trace_id:
+        publish_monitor.update_publish_status(trace_id, 'failed', "已达到最大重试次数，发布失败")
     return {"success": False, "error": "已达到最大重试次数，发布失败"}
 
 
@@ -2093,10 +2126,15 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
     返回:
         字典，包含上传结果统计
     """
-        # 如果max_uploads为0，直接返回不上传任何视频
+    # 确保监控线程已启动
+    if not publish_monitor.is_running:
+        publish_monitor.start()
+        
+    # 如果max_uploads为0，直接返回不上传任何视频
     if max_uploads == 0:
         logger.info(f"上传数量设置为0，跳过上传")
         return {"success": 0, "failed": 0, "total": 0, "details": []}
+        
     # 使用子账号的cookies（如果提供了appid）
     if appid:
         logger.info(f"检测到appid参数: {appid}，将使用子账号cookies")
@@ -2145,128 +2183,90 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
     
     # 定义发布处理线程
     def publish_worker():
-        """处理视频发布的工作线程"""
-        logger.info("启动发布处理线程")
+        """发布处理线程"""
+        max_wait_time = 60  # 最多等待60秒
+        start_time = time.time()
         
-        
-        while True:
+        while (not upload_completed.is_set() or not publish_queue.empty()) and time.time() - start_time < max_wait_time:
             try:
-                # 从队列获取发布信息
-                publish_info = publish_queue.get()
-                if publish_info is None:
-                    publish_queue.task_done()
+                # 从发布队列获取视频信息，设置很短的超时
+                try:
+                    publish_info = publish_queue.get(timeout=1)
+                except queue.Empty:
+                    # 检查是否所有任务都已完成
+                    if upload_completed.is_set() and publish_queue.empty():
+                        logger.info("所有发布任务已完成")
+                        processing_completed.set()  # 设置处理完成信号
+                        break
+                    
+                    # 检查是否超时
+                    if time.time() - start_time >= max_wait_time:
+                        logger.warning("发布处理超时，将强制退出")
+                        break
+                        
+                    continue
+                
+                if publish_info is None:  # 结束信号
+                    logger.info("收到结束信号，发布线程将退出")
                     break
-
-                # 解析发布所需信息
+                    
                 file_id = publish_info["file_id"]
                 video_name = publish_info["video_name"]
-                pic_result = publish_info.get("pic_result")
-                file_path = publish_info.get("file_path", "")
-
-                # 为发布获取新的mt令牌
-                mt = get_mt(cookies)
-                if not mt:
-                    logger.error(f"获取发布令牌失败: {video_name}")
-                    update_stats(publish_counter, failed=1, processed=1)
-                    update_publish_stats(appid, success=False, error_msg="获取发布令牌失败")
-                    publish_queue.task_done()
-                    continue
-                # 获取视频URL
-                video_url = get_video_url(file_id, mt)
-                if not video_url:
-                    logger.error(f"获取视频URL失败: {video_name}")
-                    return None, None, None, None, None
-                # 生成或格式化标题
-                video_title = title
-                if "{name}" in title:
-                    name_without_ext = os.path.splitext(video_name)[0]
-                    video_title = title.replace("{name}", name_without_ext)
-
-                logger.info(f"开始发布视频: {video_name}, 标题: {video_title}")
-                
-                # 打印发布参数
-                publish_params = {
-                    'loginPublicId': appid,
-                    'videoId': file_id,
-                    'videoFile': video_url,
-                    'videoFileName': video_name,
-                    'extProperty': pic_result,
-                    'mt': mt,
-                    'scheduleTime': scheduleTime,
-                    'title': video_title,
-                    'topic_info': topic_info
-                }
-                logger.info(f"发布参数: {publish_params}")
+                pic_result = publish_info["pic_result"]
+                file_path = publish_info["file_path"]
+                mt = publish_info["mt"]
+                trace_id = publish_info.get("trace_id")  # 获取trace_id
                 
                 try:
+                    # 发布视频
                     publish_result = publish(
                         loginPublicId=appid,
                         videoId=file_id,
-                        videoFile=video_url,
+                        videoFile=file_id,  # 使用file_id作为videoFile
                         videoFileName=video_name,
                         extProperty=pic_result,
-                        mt=mt,  # 使用与上传时相同的mt
+                        mt=mt,
                         scheduleTime=scheduleTime,
-                        title=video_title,
+                        title=title,
                         cookies=cookies,
-                        topic_info=topic_info
+                        topic_info=topic_info,
+                        trace_id=trace_id  # 传递trace_id
                     )
                     
-                    if publish_result and publish_result.get("success"):
-                        logger.info(f"视频发布成功: {video_name}")
+                    if publish_result.get("success"):
                         update_stats(publish_counter, success=1, processed=1)
-                        update_publish_stats(appid, success=True)
-                        
-                        result = {
-                            "file_path": file_path,
-                            "success": True,
-                            "video_name": video_name,
-                            "publish_time": publish_result.get("publishTime", ""),
-                            "message": "发布成功"
-                        }
-                                    # 如果设置了删除原视频
-                        if delete_original and os.path.exists(file_path):
+                        if delete_original:
                             try:
                                 os.remove(file_path)
-                                logger.info(f"已删除原视频文件: {file_path}")
                             except Exception as e:
-                                logger.error(f"删除原视频文件失败: {str(e)}")
-
+                                logger.error(f"删除原始文件失败: {str(e)}")
                     else:
-                        error_msg = publish_result.get("errorMessage", "未知错误")
-                        logger.error(f"视频发布失败: {video_name} - {error_msg}")
                         update_stats(publish_counter, failed=1, processed=1)
-                        update_publish_stats(appid, success=False, error_msg=error_msg)
                         
-                        result = {
-                            "file_path": file_path,
-                            "success": False,
-                            "video_name": video_name,
-                            "error": f"发布失败: {error_msg}"
-                        }
                 except Exception as e:
-                    logger.error(f"发布过程中出现异常: {str(e)}")
+                    logger.error(f"发布视频时出错: {str(e)}")
+                    logger.error(f"完整堆栈跟踪:\n{traceback.format_exc()}")
                     update_stats(publish_counter, failed=1, processed=1)
-                    update_publish_stats(appid, success=False, error_msg=str(e))
                     
-                    result = {
-                        "file_path": file_path,
-                        "success": False,
-                        "video_name": video_name,
-                        "error": f"发布异常: {str(e)}"
-                    }
-                
-                # 记录处理结果
-                with threading.Lock():
-                    processed_details.append(result)
-                
-                # 标记任务完成
-                publish_queue.task_done()
-                
-            except Exception as e:
-                logger.error(f"发布工作线程异常: {str(e)}")
-                if publish_queue.unfinished_tasks > 0:
+                finally:
                     publish_queue.task_done()
+                    
+            except Exception as e:
+                logger.error(f"发布处理线程异常: {str(e)}")
+                logger.error(f"完整堆栈跟踪:\n{traceback.format_exc()}")
+                time.sleep(1)  # 发生异常时等待一秒后继续
+                
+                # 检查是否超时
+                if time.time() - start_time >= max_wait_time:
+                    logger.warning("发布处理中出现异常，且已超时，将强制退出")
+                    break
+        
+        # 确保在退出时设置完成信号
+        if not processing_completed.is_set():
+            logger.info("发布处理线程结束，设置完成信号")
+            processing_completed.set()
+            
+        logger.info("发布线程退出")
     
     # 启动发布处理线程
     publish_thread = threading.Thread(target=publish_worker)
@@ -2275,39 +2275,43 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
     
     # 定义上传函数
     def upload_video(file_path):
+        """上传单个视频"""
         try:
-            logger.info(f"开始处理视频文件: {file_path}")
-            video_name = os.path.basename(file_path)
-            file_size = os.path.getsize(file_path)
-
-            # 为每个视频获取独立的mt
+            # 添加发布任务到监控系统
+            video_info = {
+                'video_id': None,  # 将在上传成功后更新
+                'title': title,
+                'file_path': file_path,
+                'appid': appid
+            }
+            trace_id = publish_monitor.add_publish_task(video_info)
+            
+            # 更新状态为上传中
+            publish_monitor.update_publish_status(trace_id, 'uploading')
+            
+            # 获取上传令牌
             mt = get_mt(cookies)
             if not mt:
-                logger.error(f"获取上传令牌失败: {video_name}")
+                error_msg = "获取上传令牌失败"
+                publish_monitor.update_publish_status(trace_id, 'failed', error_msg)
                 return None, None, None, None, None
-
-            # 上传视频文件
-            logger.info(f"开始上传视频: {video_name}")
-            file_id = None
-            
-            try:
-                # 根据文件大小选择上传方式
-                if file_size <= 4 * 1024 * 1024:  # 4MB
-                    logger.info(f"上传小文件 - {file_path}")
-                    file_id, video_name = upload_4m_video(mt, file_path)
-                else:
-                    logger.info(f"上传大文件 - {file_path}, 大小: {file_size/1024/1024:.2f}MB")
-                    file_id, video_name = upload_large_video(mt, file_path, file_size)
-            finally:
-                # 强制内存回收，清理大文件占用的内存
-                import gc
-                gc.collect()
-                logger.debug("已执行内存回收")
+                
+            # 上传视频
+            file_size = os.path.getsize(file_path)
+            if file_size <= 4 * 1024 * 1024:  # 4MB
+                file_id, video_name = upload_4m_video(mt, file_path)
+            else:
+                file_id, video_name = upload_large_video(mt, file_path, file_size)
                 
             if not file_id:
-                logger.error(f"视频上传失败: {video_name}")
+                error_msg = "视频上传失败"
+                publish_monitor.update_publish_status(trace_id, 'failed', error_msg)
                 return None, None, None, None, None
-
+                
+            # 更新视频ID
+            video_info['video_id'] = file_id
+            publish_monitor.update_publish_status(trace_id, 'publishing')
+            
             # 生成并上传封面
             cover_path = None
             pic_result = None
@@ -2323,8 +2327,6 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
             except Exception as e:
                 logger.error(f"处理封面时出错: {str(e)}")
 
-            
-
             # 如果生成了临时封面文件，删除它
             if cover_path and os.path.exists(cover_path):
                 try:
@@ -2339,19 +2341,22 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
                 "video_name": video_name,
                 "pic_result": pic_result,
                 "file_path": file_path,
-                "mt": mt  # 传递mt给发布函数
+                "mt": mt,  # 传递mt给发布函数
+                "trace_id": trace_id  # 添加trace_id到发布信息中
             }
             logger.info(f"将视频添加到发布队列: {video_name}")
             publish_queue.put(publish_info)
             update_stats(upload_counter, success=1, processed=1)
 
-            return file_id, video_name, pic_result, mt
-
+            return file_id, video_name, pic_result, mt, trace_id
+                
         except Exception as e:
-            logger.error(f"上传视频时发生错误: {str(e)}")
-            logger.error(f"完整堆栈跟踪:\n{traceback.format_exc()}")
+            error_msg = f"上传发布过程出现异常: {str(e)}"
+            logger.error(error_msg)
+            if trace_id:
+                publish_monitor.update_publish_status(trace_id, 'failed', error_msg)
             return None, None, None, None, None
-    
+            
     # 使用线程池进行并发上传
     try:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -2377,23 +2382,40 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
             # 向发布队列发送结束信号
             publish_queue.put(None)
 
+            # 限制队列等待时间
+            wait_start = time.time()
+            max_wait_time = 60  # 最多等待60秒
+            
+            while not publish_queue.empty() and time.time() - wait_start < max_wait_time:
+                logger.info(f"等待发布队列处理完成...剩余 {publish_queue.qsize()} 个任务")
+                time.sleep(5)
+                
+            # 如果队列未空但已超时，强制继续
             if not publish_queue.empty():
-                logger.info("等待发布队列处理完成...")
-                try:
-                    publish_queue.join()
-                except Exception as e:
-                    logger.error(f"等待发布队列完成时出错: {str(e)}")
-                    logger.error(f"完整堆栈跟踪:\n{traceback.format_exc()}")
+                logger.warning(f"发布队列处理超时，仍有 {publish_queue.qsize()} 个任务未处理，将强制继续")
     
     except (KeyboardInterrupt, SystemExit):
         logger.info("接收到终止信号，正在停止所有任务...")
         thread_control.stop()
         upload_completed.set()  # 确保发布线程能够退出
     
-    # 等待发布线程完成
-    publish_thread.join(timeout=5)
+    # 等待发布线程完成，但设置超时
+    logger.info("等待发布线程完成...")
+    start_time = time.time()
+    max_thread_wait = 30  # 30秒超时
     
-    # 返回最终结果
+    while publish_thread.is_alive() and time.time() - start_time < max_thread_wait:
+        time.sleep(1)
+        
+    if publish_thread.is_alive():
+        logger.warning("发布线程等待超时，将强制继续")
+    
+    # 确保处理完成信号已设置
+    if not processing_completed.is_set():
+        logger.warning("处理完成信号未设置，将强制设置")
+        processing_completed.set()
+    
+    # 创建最终结果
     logger.info(f"账号 {appid} 的视频处理完成统计:")
     logger.info(f"上传统计 - 总计: {total_count}, 成功: {upload_counter['success']}, 失败: {upload_counter['failed']}")
     logger.info(f"发布统计 - 处理: {publish_counter['processed']}, 成功: {publish_counter['success']}, 失败: {publish_counter['failed']}")
@@ -2407,12 +2429,24 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
     
     logger.info(f"最终统计结果 - 总计: {total_count}, 成功: {success_count}, 失败: {failed_count}")
     
-    return {
+    # 构建返回结果
+    result = {
         "success": success_count,
         "failed": failed_count,
         "total": total_count,
         "details": processed_details
     }
+    
+    # 强制停止监控线程 (不再等待)
+    try:
+        if publish_monitor.is_running:
+            publish_monitor.stop()
+    except Exception as e:
+        logger.error(f"停止监控线程时出错: {str(e)}")
+    
+    # 确保函数返回
+    logger.info("函数即将返回给app...")
+    return result
 
 # 辅助函数 - 转换字节为人类可读的大小
 def human_readable_size(size, decimal_places=2):
@@ -2423,3 +2457,156 @@ def human_readable_size(size, decimal_places=2):
     return f"{size:.{decimal_places}f} {unit}"
 
 create_table()
+
+class VideoPublishMonitor:
+    """
+    视频发布监控类
+    用于追踪视频发布状态和异常情况
+    """
+    def __init__(self):
+        """初始化视频发布监控器"""
+        self.publish_status = {}  # 存储发布状态
+        self.monitor_thread = None  # 监控线程
+        self.is_running = False  # 运行状态标志
+        self.lock = threading.Lock()  # 线程锁
+        self.total_tasks = 0  # 总任务数
+        self.completed_tasks = 0  # 已完成任务数
+        self.all_tasks_completed = threading.Event()  # 所有任务完成事件
+        logger.info("视频发布监控器初始化完成")
+        
+    def start(self):
+        """启动监控线程"""
+        if not self.is_running:
+            self.is_running = True
+            self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+            self.monitor_thread.start()
+            logger.info("视频发布监控线程已启动")
+            
+    def stop(self):
+        """停止监控线程"""
+        self.is_running = False
+        if self.monitor_thread:
+            self.monitor_thread.join()
+            logger.info("视频发布监控线程已停止")
+            
+    def add_publish_task(self, video_info):
+        """
+        添加发布任务
+        
+        参数:
+            video_info: 视频信息字典，包含video_id, title, file_path, appid等
+            
+        返回:
+            str: 追踪ID
+        """
+        trace_id = str(uuid.uuid4())
+        with self.lock:
+            self.publish_status[trace_id] = {
+                'status': 'pending',
+                'start_time': datetime.now(),
+                'last_update': datetime.now(),
+                'video_info': video_info,
+                'error_msg': None
+            }
+            # 增加总任务数
+            self.total_tasks += 1
+            logger.info(f"添加发布任务: {trace_id}, 当前总任务数: {self.total_tasks}")
+        return trace_id
+        
+    def update_publish_status(self, trace_id, status, error_msg=None):
+        """
+        更新发布状态
+        
+        参数:
+            trace_id: 追踪ID
+            status: 状态 ('pending', 'uploading', 'publishing', 'success', 'failed')
+            error_msg: 错误信息（如果有）
+        """
+        with self.lock:
+            if trace_id in self.publish_status:
+                self.publish_status[trace_id]['status'] = status
+                self.publish_status[trace_id]['last_update'] = datetime.now()
+                if error_msg:
+                    self.publish_status[trace_id]['error_msg'] = error_msg
+                    
+                # 如果状态是成功或失败，增加已完成任务计数
+                if status in ['success', 'failed']:
+                    self.completed_tasks += 1
+                    logger.info(f"任务完成计数: {self.completed_tasks}/{self.total_tasks}")
+                    
+                # 检查是否所有任务都已完成
+                if self.completed_tasks == self.total_tasks and self.total_tasks > 0:
+                    logger.info("所有任务已完成，设置完成信号")
+                    self.all_tasks_completed.set()
+                    logger.info("完成信号已设置")
+    
+    def get_publish_status(self, trace_id):
+        """获取发布状态"""
+        with self.lock:
+            return self.publish_status.get(trace_id)
+            
+    def wait_for_completion(self, timeout=30):  # 默认30秒超时
+        """
+        等待所有发布任务完成
+        
+        参数:
+            timeout: 超时时间（秒）
+            
+        返回:
+            bool: 是否所有任务都已完成
+        """
+        start_time = time.time()
+        # 检查是否有未完成的任务
+        with self.lock:
+            # 如果没有任务，直接返回True
+            if self.total_tasks == 0:
+                logger.info("没有待处理的任务，直接返回")
+                return True
+            
+            # 如果所有任务已完成，直接返回True
+            if self.completed_tasks == self.total_tasks:
+                logger.info(f"所有任务已完成 ({self.completed_tasks}/{self.total_tasks})，直接返回")
+                return True
+            
+            # 否则，设置超时时间
+            logger.info(f"等待任务完成... {self.completed_tasks}/{self.total_tasks}")
+        
+        # 等待完成信号，最多等待timeout秒
+        result = self.all_tasks_completed.wait(timeout)
+        
+        # 超时后强制设置完成信号
+        if not result:
+            logger.warning(f"等待任务完成超时 ({self.completed_tasks}/{self.total_tasks})，强制设置完成信号")
+            self.all_tasks_completed.set()
+        
+        return True  # 无论如何都返回True，以确保函数能继续执行
+            
+    def _monitor_loop(self):
+        """监控循环"""
+        while self.is_running:
+            try:
+                # 检查所有发布任务的状态
+                with self.lock:
+                    current_time = datetime.now()
+                    for trace_id, info in self.publish_status.items():
+                        # 检查是否有超时的任务（3分钟）
+                        if (current_time - info['start_time']).total_seconds() > 180:  # 3分钟
+                            if info['status'] not in ['success', 'failed']:
+                                info['status'] = 'failed'
+                                info['error_msg'] = '发布超时'
+                                logger.error(f"发布任务超时: {trace_id}")
+                                self.completed_tasks += 1
+                                
+                                # 检查是否所有任务都已完成
+                                if self.completed_tasks == self.total_tasks and self.total_tasks > 0:
+                                    self.all_tasks_completed.set()
+                                    logger.info("所有发布任务已完成（包含超时任务）")
+                                
+                time.sleep(10)  # 每10秒检查一次
+                
+            except Exception as e:
+                logger.error(f"监控线程异常: {str(e)}")
+                time.sleep(10)  # 发生异常时等待10秒后继续
+
+# 创建全局监控实例
+publish_monitor = VideoPublishMonitor()
