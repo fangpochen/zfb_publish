@@ -11,12 +11,13 @@ from key_verification import verify_key
 import multiprocessing
 import logging
 import json
+import requests
 
 warnings.filterwarnings("ignore")
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QBrush, QColor, QPainter, QFont, QIcon
 from PyQt5.QtWidgets import QMainWindow, QApplication, QTableWidgetItem, QCheckBox, QHBoxLayout, QWidget, QPushButton, \
-    QFileDialog, QMessageBox, QAbstractItemView, QVBoxLayout, QLabel, QLineEdit
+    QFileDialog, QMessageBox, QAbstractItemView, QVBoxLayout, QLabel, QLineEdit, QDialog, QListWidget
 from ui.ui import Ui_MainWindow
 from zfb import *
 import pandas as pd
@@ -308,6 +309,13 @@ class Thread(QThread):
             logger.info("cookies:" + str(self.df.iloc[i]["cookies_dict"]))
             logger.info("appid:" + str(self.df.iloc[i]["appid"]))
             
+            # 获取话题信息
+            topics_info = None
+            # 如果有话题信息，从MainWindow获取
+            if hasattr(QApplication.instance().activeWindow(), 'current_topic_info'):
+                topics_info = QApplication.instance().activeWindow().current_topic_info
+                logger.info(f"使用话题信息: {topics_info}")
+            
             stats = upload_publish_video(
                 self.df.iloc[i]["cookies_dict"], 
                 self.df.iloc[i]["folder_path"],
@@ -317,7 +325,8 @@ class Thread(QThread):
                 appid=self.df.iloc[i]["appid"], 
                 index=i,
                 max_uploads=self.df.iloc[i]["total_uploads"], 
-                delete_original=self.delete_original
+                delete_original=self.delete_original,
+                topics=topics_info
             )
             
             if isinstance(stats, dict):
@@ -384,9 +393,24 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             if self.checkBox.isChecked():
                 self.timer_login.start(300000)
 
-            # 添加删除原视频的复选框
+            # 添加删除原视频的复选框 (确保只有一个)
             self.delete_video_checkbox = QCheckBox("上传后删除原视频")
             self.delete_video_checkbox.setChecked(True)  # 默认勾选
+            
+            # 查找可能存在的同名复选框并删除
+            existing_checkboxes = []
+            for i in range(self.horizontalLayout_2.count()):
+                item = self.horizontalLayout_2.itemAt(i)
+                if item and item.widget() and isinstance(item.widget(), QCheckBox) and "删除原视频" in item.widget().text():
+                    existing_checkboxes.append(item.widget())
+            
+            # 如果找到了同名复选框，删除它们
+            for checkbox in existing_checkboxes:
+                self.horizontalLayout_2.removeWidget(checkbox)
+                checkbox.hide()
+                checkbox.deleteLater()
+                
+            # 添加新的复选框
             self.horizontalLayout_2.addWidget(self.delete_video_checkbox)
 
             # 添加这些设置来启用行选择
@@ -404,6 +428,20 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.verify_timer.start(1800000)  # 30分钟 = 1800000毫秒
             
             # 在 horizontalLayout_2 中添加 Chrome 配置按钮
+            # 先检查是否已经有同名按钮
+            existing_buttons = []
+            for i in range(self.horizontalLayout_2.count()):
+                item = self.horizontalLayout_2.itemAt(i)
+                if item and item.widget() and isinstance(item.widget(), QPushButton) and item.widget().text() == "配置Chrome路径":
+                    existing_buttons.append(item.widget())
+            
+            # 如果找到了同名按钮，删除它们
+            for button in existing_buttons:
+                self.horizontalLayout_2.removeWidget(button)
+                button.hide()
+                button.deleteLater()
+                
+            # 添加新的按钮
             self.chrome_config_button = QPushButton("配置Chrome路径")
             self.chrome_config_button.clicked.connect(self.configure_chrome_path)
             self.horizontalLayout_2.addWidget(self.chrome_config_button)
@@ -421,6 +459,47 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             # 连接搜索框信号
             self.search_input.textChanged.connect(self.filter_table)
 
+            # 话题搜索相关初始化
+            self.is_updating_topics = False
+            self.topic_info = {}  # 存储话题完整信息
+            self.current_topic_info = None
+            
+            # 创建话题搜索组件
+            self.topic_combo = QLineEdit()
+            self.topic_combo.setPlaceholderText("输入关键词搜索话题")
+            
+            # 创建话题搜索按钮（只创建一次）
+            self.searchTopicButton = QPushButton("搜索话题")
+            self.searchTopicButton.clicked.connect(self.search_topics)
+            
+            # 获取话题设置行布局并清理可能存在的重复按钮
+            layout = self.findChild(QHBoxLayout, "horizontalLayout_7")
+            if layout:
+                # 删除可能存在的重复搜索按钮
+                existing_buttons = []
+                for i in range(layout.count()):
+                    item = layout.itemAt(i)
+                    if item and item.widget() and isinstance(item.widget(), QPushButton) and item.widget().text() == "搜索话题":
+                        existing_buttons.append(item.widget())
+                
+                for button in existing_buttons:
+                    layout.removeWidget(button)
+                    button.hide()
+                    button.deleteLater()
+                
+                # 先添加下拉框替换原来的lineEdit_2
+                old_lineEdit = self.lineEdit_2
+                old_text = old_lineEdit.text() if hasattr(self, 'lineEdit_2') and self.lineEdit_2 else ""
+                old_pos = layout.indexOf(old_lineEdit) if hasattr(self, 'lineEdit_2') and self.lineEdit_2 else -1
+                if old_pos >= 0:
+                    layout.removeWidget(old_lineEdit)
+                    old_lineEdit.hide()
+                    layout.insertWidget(old_pos, self.topic_combo)
+                    self.topic_combo.setText(old_text)
+                
+                # 添加搜索按钮
+                layout.insertWidget(3, self.searchTopicButton)
+            
         except Exception as e:
             logger.error(f"主窗口初始化失败: {str(e)}")
             print(f"初始化失败: {str(e)}")
@@ -672,16 +751,32 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         """
         try:
             data = self.get_check_row()
-            tag = self.lineEdit_2.text()
+            # 优先使用话题组合框的文本
+            tag = self.topic_combo.text()
+            
+            # 设置话题到数据帧
             self.df.loc[data, "topic_settings"] = tag
             df = self.df.loc[data]
             update_existing_fields(df)
+            
+            # 如果有话题信息，也保存到数据帧(扩展功能)
+            if hasattr(self, 'current_topic_info') and self.current_topic_info:
+                # 这里可以考虑将话题信息存储到附加字段，例如topic_info
+                # self.df.loc[data, "topic_info"] = json.dumps(self.current_topic_info)
+                # 但这需要修改数据库模式，所以暂不实现
+                pass
+                
+            # 更新UI
             for i in range(len(data)):
                 if data[i]:
-                    # 话题设置在第6列（显示为"#集五福#"的位置）
+                    # 话题设置在第6列
                     self.tableWidget.setItem(i, 6, QTableWidgetItem(tag))
+                    
+            QMessageBox.information(self, "设置成功", f"已成功设置话题: {tag}")
+            
         except Exception as e:
             logger.error(f"设置话题失败: {str(e)}")
+            QMessageBox.warning(self, "设置失败", f"设置话题失败: {str(e)}")
 
     def finish(self, stats):
         """
@@ -1224,7 +1319,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                     ''', (video_count, appid))
                     
                     # 更新界面
-                    self.tableWidget.setItem(i, 8, QTableWidgetItem(str(video_count)))  # 8是文件总数列的索引
+                    self.tableWidget.setItem(i, 8, QTableWidgetItem(str(video_count)))
                     
                     # 更新DataFrame
                     self.df.at[i, "total_files"] = video_count
@@ -1304,6 +1399,204 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 button.setEnabled(False)
         except Exception as e:
             logger.error(f"禁用按钮时发生错误: {str(e)}")
+
+    def search_topics(self):
+        """
+        根据输入的关键词搜索话题
+        """
+        try:
+            # 如果正在更新话题列表，直接返回
+            if self.is_updating_topics:
+                return
+
+            keywords = self.topic_combo.text().strip()
+            # 如果关键词带有#号，不触发搜索
+            if keywords.startswith('#') and keywords.endswith('#'):
+                return
+                
+            if not keywords:
+                self.topic_info.clear()  # 清空话题信息
+                return
+                
+            # 获取当前选中行的cookies和appId
+            selected_rows = []
+            for i in range(self.tableWidget.rowCount()):
+                checkbox = self.tableWidget.cellWidget(i, 0)
+                if isinstance(checkbox, QCheckBox) and checkbox.isChecked():
+                    selected_rows.append(i)
+                    
+            if not selected_rows:
+                QMessageBox.warning(self, "警告", "请先选择账号")
+                return
+                
+            row = selected_rows[0]
+            cookies = self.df.iloc[row]["cookies_dict"]
+            appid = self.df.iloc[row]["appid"]
+            
+            # 请求话题推荐接口
+            headers = {
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'zh-CN,zh;q=0.9',
+                'Connection': 'keep-alive',
+                'Content-Type': 'application/json;charset=UTF-8',
+                'Origin': 'https://c.alipay.com',
+                'Referer': 'https://c.alipay.com/',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            }
+            
+            params = {
+                '_input_charset': 'utf-8',
+                '_output_charset': 'utf-8',
+            }
+            
+            json_data = {
+                'keywords': keywords,
+                'publicId': appid,
+                'sourceId': 'S',
+            }
+            
+            logger.info(f"搜索话题请求参数: {json_data}")
+            
+            response = requests.post(
+                'https://fuwu.alipay.com/platform/queryTopicRecommend.json',
+                params=params,
+                cookies=cookies,
+                headers=headers,
+                json=json_data,
+            )
+            
+            logger.info(f"搜索话题响应: {response.text}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("stat") == "ok":
+                    # 设置标志位，避免触发搜索
+                    self.is_updating_topics = True
+                    
+                    # 清空话题信息
+                    self.topic_info.clear()
+                    
+                    # 创建话题选择对话框
+                    dialog = QDialog(self)
+                    dialog.setWindowTitle("选择话题")
+                    dialog.setMinimumWidth(400)
+                    dialog.setMinimumHeight(500)
+                    
+                    layout = QVBoxLayout(dialog)
+                    
+                    # 添加提示标签
+                    tip_label = QLabel("搜索结果:")
+                    tip_label.setAlignment(Qt.AlignCenter)
+                    layout.addWidget(tip_label)
+                    
+                    # 添加话题列表
+                    topic_list = QListWidget()
+                    
+                    # 添加搜索结果到列表
+                    topics = data.get("result", [])
+                    if topics:
+                        for topic in topics:
+                            topic_name = topic.get("name", "")
+                            topic_id = topic.get("topicId", "")
+                            if topic_name:
+                                display_text = f"#{topic_name}#"
+                                topic_list.addItem(display_text)
+                                # 保存话题完整信息
+                                self.topic_info[display_text] = {
+                                    'name': topic_name,
+                                    'topicId': topic_id
+                                }
+                        logger.info(f"找到{len(topics)}个话题")
+                    else:
+                        tip_label.setText("未找到相关话题")
+                        logger.info("未找到相关话题")
+                    
+                    layout.addWidget(topic_list)
+                    
+                    # 添加自定义话题输入
+                    custom_layout = QHBoxLayout()
+                    custom_label = QLabel("自定义话题:")
+                    custom_input = QLineEdit()
+                    custom_input.setPlaceholderText("输入自定义话题 (例如: #我的话题#)")
+                    custom_input.setText(self.topic_combo.text())
+                    custom_layout.addWidget(custom_label)
+                    custom_layout.addWidget(custom_input)
+                    layout.addLayout(custom_layout)
+                    
+                    # 添加确定和取消按钮
+                    button_layout = QHBoxLayout()
+                    ok_button = QPushButton("确定")
+                    cancel_button = QPushButton("取消")
+                    button_layout.addWidget(ok_button)
+                    button_layout.addWidget(cancel_button)
+                    layout.addLayout(button_layout)
+                    
+                    # 绑定列表选择事件
+                    def on_topic_selected(item):
+                        selected_topic = item.text()
+                        custom_input.setText(selected_topic)
+                    
+                    topic_list.itemClicked.connect(on_topic_selected)
+                    
+                    # 绑定按钮事件
+                    def on_accept():
+                        selected_topic = custom_input.text().strip()
+                        if selected_topic:
+                            # 确保话题格式正确
+                            if not selected_topic.startswith("#"):
+                                selected_topic = f"#{selected_topic}"
+                            if not selected_topic.endswith("#"):
+                                selected_topic = f"{selected_topic}#"
+                                
+                            self.topic_combo.setText(selected_topic)
+                            
+                            # 如果是自定义话题，创建话题信息
+                            if selected_topic not in self.topic_info:
+                                # 移除#号
+                                topic_name = selected_topic.strip('#')
+                                self.topic_info[selected_topic] = {
+                                    'name': topic_name,
+                                    'topicId': ""  # 自定义话题没有ID
+                                }
+                                
+                            # 设置当前选择的话题信息
+                            topic_data = self.topic_info[selected_topic]
+                            self.current_topic_info = {
+                                'topicInfoVOList': [{
+                                    'topicName': selected_topic,
+                                    'topicId': topic_data.get('topicId', ''),
+                                    'topicType': 'NORMAL'
+                                }]
+                            }
+                            logger.info(f"已选择话题: {selected_topic}, ID: {topic_data.get('topicId', '')}")
+                        dialog.accept()
+                    
+                    def on_cancel():
+                        dialog.reject()
+                    
+                    ok_button.clicked.connect(on_accept)
+                    cancel_button.clicked.connect(on_cancel)
+                    
+                    # 重置标志位
+                    self.is_updating_topics = False
+                    
+                    # 显示对话框
+                    dialog.exec_()
+                else:
+                    error_msg = data.get("errorMessage", "未知错误")
+                    logger.error(f"搜索话题失败: {error_msg}")
+                    QMessageBox.warning(self, "搜索失败", f"搜索话题失败: {error_msg}")
+                    self.is_updating_topics = False
+            else:
+                logger.error(f"搜索话题请求失败: HTTP {response.status_code}")
+                QMessageBox.warning(self, "搜索失败", f"搜索话题请求失败: HTTP {response.status_code}")
+                self.is_updating_topics = False
+                            
+        except Exception as e:
+            logger.error(f"搜索话题失败: {str(e)}")
+            QMessageBox.warning(self, "搜索失败", f"搜索话题失败: {str(e)}")
+            # 重置标志位
+            self.is_updating_topics = False
 
 
 def show_key_verification():

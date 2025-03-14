@@ -1174,7 +1174,7 @@ def format_time_string(time_str):
     formatted_time = dt.strftime('%Y-%m-%d %H:%M')
     return formatted_time
 
-def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies):
+def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies, topics=None):
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9',
@@ -1243,6 +1243,32 @@ def publish(loginPublicId, videoId, videoFile, videoFileName, extProperty, mt, s
         },
     }
 
+    # 处理话题信息 - 两种方式:
+    # 1. 如果传入了topics参数，直接使用
+    if topics and isinstance(topics, dict) and 'topicInfoVOList' in topics:
+        json_data['topicInfoVOList'] = topics['topicInfoVOList']
+        logger.info(f"使用API话题信息: {topics['topicInfoVOList']}")
+    # 2. 从标题中提取话题
+    elif title and "#" in title:
+        # 提取所有带 # 的话题
+        topic_list = []
+        parts = title.split("#")
+        # 跳过第一个部分（如果以#开头，第一个元素是空的）
+        for i in range(1, len(parts)):
+            if parts[i].strip():
+                # 获取话题内容（去除可能的结尾#）
+                topic_text = parts[i].strip().split("#")[0].strip()
+                if topic_text:
+                    topic_list.append({
+                        "topicName": f"#{topic_text}#",
+                        "topicId": "",
+                        "topicType": "NORMAL"
+                    })
+        
+        if topic_list:
+            logger.info(f"从标题提取话题: {topic_list}")
+            json_data['topicInfoVOList'] = topic_list
+
     # 只有当 scheduleTime 有值时才添加到 json_data
     if scheduleTime:
         json_data['scheduleTime'] = format_time_string(scheduleTime)
@@ -1272,7 +1298,7 @@ def get_app_id(cookies):
     headers = {
         'accept': '*/*',
         'accept-language': 'zh-CN,zh;q=0.9',
-        # 'cookie': 'JSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43GZ00; mobileSendTime=-1; credibleMobileSendTime=-1; ctuMobileSendTime=-1; riskMobileBankSendTime=-1; riskMobileAccoutSendTime=-1; riskMobileCreditSendTime=-1; riskCredibleMobileSendTime=-1; riskOriginalAccountMobileSendTime=-1; session.cookieNameId=ALIPAYJSESSIONID; cna=ova4H2k/PjoBASQOA3pmflO9; receive-cookie-deprecation=1; tfstk=fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.; EXC_ANT_KEY=excashier_20001_FP_SENIOR_HJPGP11505070830582; LoginForm=alipay_login_auth; CLUB_ALIPAY_COM=2088442960985162; iw.userid="K1iSL120ipFvFLCnWp3Rzw=="; ali_apache_tracktmp="uid=2088442960985162"; ALI_PAMIR_SID=U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2; __TRACERT_COOKIE_bucUserId=2088442960985162; userId=2088442960985162; auth_goto_http_type=https; ctoken=gwha_z9s2Q7fFA04; _CHIPS-ctoken=gwha_z9s2Q7fFA04; alipay="K1iSL120ipFvFLCnWp3Rz9W5rYlr9VP9dcKwk8Zv/g=="; auth_jwt=e30.eyJleHAiOjE3MzM3NjEzNzQyOTksInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoiN1VvMlR2b0pXeGlqNmZ5THhSeTc5Z1RGZy9xM2dOYzY5YjExNGRzIiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9.iBv6JdB5Iaq4HWm_UgK0hroK58cDunVi-Xp6G_YiAr4; _CHIPS-ALIPAYJSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43; zone=GZ00F; ALIPAYJSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43GZ00; rtk=D5UPEMOnt+FpPIbyy5BMpuCl6tPqnx3obAScmr4CZ1cRnx8YZVO; JSESSIONID=717E1A1BA7F45E250873B276DABB2C55; spanner=zYmpAhTHmR4faZIwLuJsT2xROgo9NkOZ',
+        # 'cookie': 'JSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43GZ00; mobileSendTime=-1; credibleMobileSendTime=-1; ctuMobileSendTime=-1; riskMobileBankSendTime=-1; riskMobileAccoutSendTime=-1; riskMobileCreditSendTime=-1; riskCredibleMobileSendTime=-1; riskOriginalAccountMobileSendTime=-1; session.cookieNameId=ALIPAYJSESSIONID; cna=ova4H2k/PjoBASQOA3pmflO9; receive-cookie-deprecation=1; tfstk=fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.; EXC_ANT_KEY=excashier_20001_FP_SENIOR_HJPGP11505070830582; LoginForm=alipay_login_auth; CLUB_ALIPAY_COM=2088442960985162; iw.userid="K1iSL120ipFvFLCnWp3Rzw=="; ali_apache_tracktmp="uid=2088442960985162"; ALI_PAMIR_SID=U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2; __TRACERT_COOKIE_bucUserId=2088442960985162; auth_goto_http_type=https; ctoken=gwha_z9s2Q7fFA04; _CHIPS-ctoken=gwha_z9s2Q7fFA04; alipay="K1iSL120ipFvFLCnWp3Rz9W5rYlr9VP9dcKwk8Zv/g=="; auth_jwt=e30.eyJleHAiOjE3MzM3NjEzNzQyOTksInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoiN1VvMlR2b0pXeGlqNmZ5THhSeTc5Z1RGZy9xM2dOYzY5YjExNGRzIiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9.iBv6JdB5Iaq4HWm_UgK0hroK58cDunVi-Xp6G_YiAr4; _CHIPS-ALIPAYJSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43; zone=GZ00F; ALIPAYJSESSIONID=RZ55O44FqJ7TLy6FuB56IeP8I1jioTauthRZ43GZ00; rtk=D5UPEMOnt+FpPIbyy5BMpuCl6tPqnx3obAScmr4CZ1cRnx8YZVO; JSESSIONID=717E1A1BA7F45E250873B276DABB2C55; spanner=zYmpAhTHmR4faZIwLuJsT2xROgo9NkOZ',
         'origin': 'https://c.alipay.com',
         'priority': 'u=1, i',
         'referer': 'https://c.alipay.com/',
@@ -1441,8 +1467,15 @@ def process_single_video(args):
     """处理单个视频的上传"""
     if thread_control.should_stop():
         return False
+    
+    # 兼容不同的参数传递方式
+    if len(args) >= 8:
+        cookies, file_path, scheduleTime, title, appid, index, delete_original, topics = args
+    else:
+        # 旧版本兼容
+        cookies, file_path, scheduleTime, title, appid, index, delete_original = args
+        topics = None
         
-    cookies, file_path, scheduleTime, title, appid, index, delete_original = args
     video_name = os.path.basename(file_path)
     logger.info(f"开始处理视频: {video_name}")
 
@@ -1463,6 +1496,24 @@ def process_single_video(args):
             except ValueError as e:
                 logger.error(f"时间格式错误: {str(e)}")
                 raise Exception("时间格式错误，请使用 YYYY-MM-DD HH:MM 或 YYYY-MM-DD HH:MM:SS 格式")
+
+        # 处理视频标题和话题
+        video_title = os.path.splitext(os.path.basename(file_path))[0]
+        
+        # 如果设置了话题，则使用话题作为标题的一部分
+        if title:
+            # 确保话题格式正确
+            if "#" not in title:
+                # 如果没有#符号，自动添加
+                title = f"#{title}#"
+            
+            # 记录带有所有话题的完整标题
+            title_with_topics = f"{video_title} {title}"
+            
+            logger.info(f"视频标题设置为: {title_with_topics}")
+        else:
+            title_with_topics = video_title
+            logger.info(f"使用默认视频标题: {title_with_topics}")
 
         # 设置默认封面图路径
         default_cover = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_cover.jpg")
@@ -1521,7 +1572,7 @@ def process_single_video(args):
             return False
             
         logger.info(f"发布视频内容 - {video_name}")
-        publish_result = publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title, cookies)
+        publish_result = publish(appid, file_id, videoFile, videoFileName, extProperty, mt, scheduleTime, title_with_topics, cookies, topics)
         
         if publish_result:
             # 更新发布日期和成功统计
@@ -1561,7 +1612,7 @@ def process_single_video(args):
 
 
 def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_workers=3, appid=None, index=None,
-                         max_uploads=None, delete_original=True):
+                         max_uploads=None, delete_original=True, topics=None):
     try:
         # 记录开始时间
         start_time = time.time()
@@ -1576,13 +1627,16 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
             video_files = video_files[:max_uploads]
             
         logger.info(f"找到{len(video_files)}个视频文件")
+        logger.info(f"话题设置: {title}")
+        if topics:
+            logger.info(f"话题信息: {topics}")
         
         # 初始化计数器
         success_count = 0
         failed_count = 0
         total_count = len(video_files)
         
-        thread_args = [(cookies, file_path, scheduleTime, title, appid, index, delete_original) 
+        thread_args = [(cookies, file_path, scheduleTime, title, appid, index, delete_original, topics) 
                       for file_path in video_files]
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1592,7 +1646,7 @@ def upload_publish_video(cookies, dir_path, title, scheduleTime=None, max_worker
                     break
                 future = executor.submit(process_single_video, args)
                 thread_control.add_future(future)
-                futures[future] = args[1]
+                futures[future] = args
 
             for future in concurrent.futures.as_completed(futures):
                 if thread_control.should_stop():

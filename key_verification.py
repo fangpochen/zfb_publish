@@ -20,7 +20,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger('key_verification')
 
-server_ip='139.224.70.41'
+server_ip='api.cloudoption.site'
 # server_ip='localhost'
 
 def verify_key(api_key):
