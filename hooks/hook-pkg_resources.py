@@ -1,9 +1,9 @@
 
-# 自定义pkg_resources钩子文件
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+# pkg_resources 钩子
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
-# 排除有问题的模块
-excludedimports = ['pkg_resources.py2_warn', 'setuptools', 'jaraco.text']
+# 收集元数据，这很重要
+datas = copy_metadata('pkg_resources') + collect_data_files('pkg_resources')
 
-# 收集pkg_resources的数据文件
-datas = collect_data_files('pkg_resources')
+# 排除知道有问题的模块
+excludedimports = ['pkg_resources.py2_warn', 'jaraco.text']
