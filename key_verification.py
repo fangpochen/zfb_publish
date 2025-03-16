@@ -8,7 +8,7 @@ import uuid
 import socket
 import cpuinfo
 import logging
-
+import netifaces
 # 配置日志
 logging.basicConfig(
     level=logging.DEBUG,
@@ -20,9 +20,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger('key_verification')
 
-server_ip='api.cloudoption.site'
-# server_ip='localhost'
-
+def get_physical_mac():
+    for iface in netifaces.interfaces():
+        addrs = netifaces.ifaddresses(iface)
+        if netifaces.AF_LINK in addrs and not iface.startswith(('lo', 'virbr', 'docker')):
+            mac = addrs[netifaces.AF_LINK][0]['addr']
+            if mac != "00:00:00:00:00:00":
+                return mac
+    return None
 def verify_key(api_key):
     hostname = socket.gethostname()
     os_info = f"{platform.system()} {platform.release()}"
@@ -30,7 +35,7 @@ def verify_key(api_key):
     mac = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff)
                     for elements in range(0,2*6,2)][::-1])
 
-    url = f"http://{server_ip}:8000/api/v1/api-keys/verify"
+    url = "https://api.cloudoption.site/api/v1/api-keys/verify"
     headers = {"Content-Type": "application/json"}
     payload = {
         "key": api_key,
@@ -44,10 +49,11 @@ def verify_key(api_key):
     }
 
     try:
-        response = requests.post(url, json=payload, headers=headers)
+        response = requests.post(url, json=payload, headers=headers, verify=True)
         response.raise_for_status()
         result = response.json()
         logger.info(f"密钥验证结果: {result}")
         return result.get("valid", False)
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as e:
+        logger.error(f"密钥验证请求失败: {str(e)}")
         return False 

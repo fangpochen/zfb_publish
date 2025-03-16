@@ -1022,7 +1022,7 @@ def upload_large_video(mt, file_path, file_size):
                 'file': ('blob', part_data, 'application/octet-stream'),
             }
 
-            response = requests.post('https://mass.alipay.com/file/multipart/upload/part', headers=headers, files=files)
+            response = requests.post('https://mass.alipay.com/file/multipart/upload/part', headers=headers, files=files,timeout=60)
             logger.info(f"分块 {part_num} 上传完成，大小: {len(part_data)}")
             logger.info(f"分块 {part_num} 响应: {response.json()}")
             return response.json()
@@ -1124,7 +1124,7 @@ def upload_pic(cookies, video_file_path):
         return json.loads(response.text).get('extProperty')
 
 
-def get_video_url(file_id, mt, max_retries=60, retry_interval=10):  # 60次 * 10秒 = 10分钟
+def get_video_url(file_id, mt, max_retries=12, retry_interval=10):  # 60次 * 10秒 = 10分钟
     """
     获取视频URL，10分钟内每10秒重试一次
     """
@@ -1478,6 +1478,47 @@ def process_single_video(args):
         
     video_name = os.path.basename(file_path)
     logger.info(f"开始处理视频: {video_name}")
+
+    # 检查视频文件是否可以正常打开
+    try:
+        import cv2
+        cap = cv2.VideoCapture(file_path)
+        if not cap.isOpened():
+            logger.error(f"视频文件无法打开: {video_name}")
+            # 如果视频无法打开，删除该文件
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    logger.info(f"已删除无法打开的视频文件: {file_path}")
+                except Exception as e:
+                    logger.error(f"删除视频文件失败: {str(e)}")
+            return {"success": False, "index": index}
+        
+        # 读取一帧检查是否正常
+        ret, frame = cap.read()
+        if not ret:
+            logger.error(f"视频文件内容损坏: {video_name}")
+            # 视频内容损坏，删除该文件
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    logger.info(f"已删除内容损坏的视频文件: {file_path}")
+                except Exception as e:
+                    logger.error(f"删除视频文件失败: {str(e)}")
+            return {"success": False, "index": index}
+        
+        # 释放视频对象
+        cap.release()
+    except Exception as e:
+        logger.error(f"验证视频时出错: {video_name}, 错误: {str(e)}")
+        # 如果验证过程出错，也删除该文件
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"已删除验证失败的视频文件: {file_path}")
+            except Exception as e_del:
+                logger.error(f"删除视频文件失败: {str(e_del)}")
+        return {"success": False, "index": index}
 
     try:
         # 验证定时发布时间
