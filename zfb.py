@@ -1022,7 +1022,7 @@ def upload_large_video(mt, file_path, file_size):
                 'file': ('blob', part_data, 'application/octet-stream'),
             }
 
-            response = requests.post('https://mass.alipay.com/file/multipart/upload/part', headers=headers, files=files,timeout=60)
+            response = requests.post('https://mass.alipay.com/file/multipart/upload/part', headers=headers, files=files,timeout=(30, 120))
             logger.info(f"分块 {part_num} 上传完成，大小: {len(part_data)}")
             logger.info(f"分块 {part_num} 响应: {response.json()}")
             return response.json()
@@ -1045,7 +1045,7 @@ def upload_large_video(mt, file_path, file_size):
             upload_args.append((i + 1, part_data, i * max_size))
 
         # 使用线程池并行上传分块
-        max_workers = min(10, num_parts)  # 最多10个线程
+        max_workers = min(5, num_parts)  # 最多10个线程
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
             for args in upload_args:
