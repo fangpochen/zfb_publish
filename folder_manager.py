@@ -45,18 +45,17 @@ class FolderManager:
                     selected_rows.append(row)
             
             if not selected_rows:
-                QMessageBox.warning(self.parent, "提示", "请先选择一个账号333")
+                self.log("未选择任何账号，无法显示文件夹")
                 return
                 
             if len(selected_rows) > 1:
-                QMessageBox.warning(self.parent, "提示", "请只选择一个账号查看文件夹")
-                return
+                self.log("选择了多个账号，仅显示第一个账号的文件夹")
                 
             # 获取选中账号的ID
             row = selected_rows[0]
             appid = self.ui.accountTable.item(row, 2).text()
             if not appid:
-                QMessageBox.warning(self.parent, "提示", "获取账号ID失败")
+                self.log("获取账号ID失败")
                 return
                 
             # 确保UI中有folderTableWidget组件

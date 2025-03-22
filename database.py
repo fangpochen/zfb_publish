@@ -731,32 +731,128 @@ class DatabaseManager:
             conn.rollback()
             return False
 
-    def get_folder_settings(self, appid):
-        """获取账号的文件夹设置列表
+    def get_folder_settings(self, appid=None):
+        """获取文件夹设置信息
         
         Args:
-            appid (str): 账号ID
+            appid: 账号ID。如果为None，则获取所有账号的文件夹设置
             
         Returns:
-            list: 文件夹设置列表
+            list: 文件夹设置信息列表
         """
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             
-            cursor.execute('''
-                SELECT id, folder_path, total_files, max_uploads, uploaded_count, status
-                FROM folder_settings
-                WHERE appid=?
-            ''', (appid,))
+            if appid:
+                # 获取指定账号的文件夹设置
+                cursor.execute('''
+                    SELECT id, appid, folder_path, total_files, max_uploads, 
+                           uploaded_count, status, last_updated
+                    FROM folder_settings
+                    WHERE appid = ?
+                ''', (appid,))
+            else:
+                # 获取所有账号的文件夹设置
+                cursor.execute('''
+                    SELECT id, appid, folder_path, total_files, max_uploads, 
+                           uploaded_count, status, last_updated
+                    FROM folder_settings
+                ''')
             
-            folders = cursor.fetchall()
+            rows = cursor.fetchall()
             conn.close()
             
-            return folders
+            # 将查询结果转换为字典列表
+            folder_settings = []
+            for row in rows:
+                setting = {
+                    'id': row[0],
+                    'appid': row[1],
+                    'folder_path': row[2],
+                    'total_files': row[3],
+                    'max_uploads': row[4],
+                    'uploaded_count': row[5],
+                    'status': row[6],
+                    'last_updated': row[7]
+                }
+                folder_settings.append(setting)
+            
+            return folder_settings
+            
         except Exception as e:
-            print(f"获取文件夹设置失败: {str(e)}")
+            print(f"获取文件夹设置信息失败: {str(e)}")
+            traceback.print_exc()
             return []
+
+    def get_folder_setting(self, appid, folder_path=None):
+        """获取指定账号的文件夹设置信息
+        
+        Args:
+            appid: 账号ID
+            folder_path: 文件夹路径，如果为None则获取该账号的第一个文件夹设置
+            
+        Returns:
+            dict: 文件夹设置信息，如果未找到则返回None
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            if folder_path:
+                # 获取指定账号和文件夹的设置
+                cursor.execute('''
+                    SELECT id, appid, folder_path, total_files, max_uploads, 
+                           uploaded_count, status, last_updated
+                    FROM folder_settings
+                    WHERE appid = ? AND folder_path = ?
+                ''', (appid, folder_path))
+                row = cursor.fetchone()
+                conn.close()
+                
+                if not row:
+                    return None
+                    
+                return {
+                    'id': row[0],
+                    'appid': row[1],
+                    'folder_path': row[2],
+                    'total_files': row[3],
+                    'max_uploads': row[4],
+                    'uploaded_count': row[5],
+                    'status': row[6],
+                    'last_updated': row[7]
+                }
+            else:
+                # 获取该账号的第一个文件夹设置
+                cursor.execute('''
+                    SELECT id, appid, folder_path, total_files, max_uploads, 
+                           uploaded_count, status, last_updated
+                    FROM folder_settings
+                    WHERE appid = ?
+                    LIMIT 1
+                ''', (appid,))
+                row = cursor.fetchone()
+                conn.close()
+                
+                if not row:
+                    return None
+                    
+                return {
+                    'id': row[0],
+                    'appid': row[1],
+                    'folder_path': row[2],
+                    'total_files': row[3],
+                    'max_uploads': row[4],
+                    'uploaded_count': row[5],
+                    'status': row[6],
+                    'last_updated': row[7]
+                }
+            
+        except Exception as e:
+            print(f"获取文件夹设置信息失败: {str(e)}")
+            traceback.print_exc()
+            return None
 
     def get_all_accounts(self):
         """获取所有账号列表
@@ -1387,6 +1483,110 @@ class DatabaseManager:
             print(f"获取今日发布视频数据失败: {str(e)}")
             traceback.print_exc()
             return []
+
+    def save_account_folder(self, appid, folder_path):
+        """保存账号的上传文件夹路径到accounts表和folder_settings表
+        
+        Args:
+            appid: 账号ID
+            folder_path: 文件夹路径
+            
+        Returns:
+            bool: 是否保存成功
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # 更新accounts表中的文件夹路径
+            cursor.execute('''
+                UPDATE accounts
+                SET folder_path = ?, last_updated = CURRENT_TIMESTAMP
+                WHERE appid = ?
+            ''', (folder_path, appid))
+            
+            # 计算文件夹中的视频文件数量
+            video_count = 0
+            if folder_path and os.path.exists(folder_path):
+                video_extensions = ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv']
+                for file in os.listdir(folder_path):
+                    file_path = os.path.join(folder_path, file)
+                    if os.path.isfile(file_path):
+                        ext = os.path.splitext(file)[1].lower()
+                        if ext in video_extensions:
+                            video_count += 1
+            
+            # 在folder_settings表中添加或更新记录
+            cursor.execute('''
+                INSERT OR REPLACE INTO folder_settings 
+                (appid, folder_path, total_files, status, last_updated) 
+                VALUES (?, ?, ?, '待上传', CURRENT_TIMESTAMP)
+            ''', (appid, folder_path, video_count))
+            
+            conn.commit()
+            conn.close()
+            print(f"已保存账号 {appid} 的文件夹路径到accounts和folder_settings表，视频数量：{video_count}")
+            return True
+            
+        except Exception as e:
+            print(f"保存账号文件夹路径失败: {str(e)}")
+            traceback.print_exc()
+            return False
+    
+    def get_account_folder(self, appid):
+        """获取账号的上传文件夹路径，优先从folder_settings表获取
+        
+        Args:
+            appid: 账号ID
+            
+        Returns:
+            dict: 包含文件夹路径和视频数量的字典，如果未设置则返回None
+        """
+        try:
+            # 先从folder_settings表获取完整信息
+            folder_setting = self.get_folder_setting(appid)
+            if folder_setting and folder_setting.get('folder_path'):
+                return {
+                    'folder_path': folder_setting.get('folder_path'),
+                    'total_files': folder_setting.get('total_files', 0)
+                }
+            
+            # 如果在folder_settings表中找不到，则从accounts表获取
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # 查询文件夹路径
+            cursor.execute('SELECT folder_path FROM accounts WHERE appid = ?', (appid,))
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result and result[0]:
+                # 计算视频数量
+                folder_path = result[0]
+                video_count = 0
+                if os.path.exists(folder_path):
+                    video_extensions = ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv']
+                    for file in os.listdir(folder_path):
+                        file_path = os.path.join(folder_path, file)
+                        if os.path.isfile(file_path):
+                            ext = os.path.splitext(file)[1].lower()
+                            if ext in video_extensions:
+                                video_count += 1
+            
+                # 同步保存到folder_settings表
+                self.save_account_folder(appid, folder_path)
+                
+                return {
+                    'folder_path': folder_path,
+                    'total_files': video_count
+                }
+            
+            return None
+            
+        except Exception as e:
+            print(f"获取账号文件夹路径失败: {str(e)}")
+            traceback.print_exc()
+            return None
 
 # 单例模式
 db_manager = DatabaseManager() 

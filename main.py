@@ -4,7 +4,7 @@
 import os
 import sys
 import traceback
-from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox, QSplashScreen, QTableWidget
+from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox, QSplashScreen, QTableWidget, QHeaderView
 from PyQt5.QtCore import Qt, QDate
 from PyQt5.QtGui import QPixmap
 from datetime import datetime
@@ -62,6 +62,15 @@ class RecommendAnalysis(QMainWindow):
         
         self.chart_manager = ChartManager(
             parent=self, 
+            log_callback=self.log_message
+        )
+        
+        # 初始化上传控制器
+        from upload_controller import UploadController
+        self.upload_controller = UploadController(
+            parent=self,
+            ui=self.ui,
+            account_manager=self.account_manager,
             log_callback=self.log_message
         )
         
@@ -189,6 +198,14 @@ class RecommendAnalysis(QMainWindow):
                     table = getattr(self.ui, table_name)
                     # 设置交替行颜色
                     table.setAlternatingRowColors(True)
+                    # 允许用户调整列宽
+                    if hasattr(table, 'horizontalHeader'):
+                        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+            
+            # 设置拆分器初始比例，更多展示账号表格
+            if hasattr(self.ui, 'mainSplitter'):
+                total_height = self.height()
+                self.ui.mainSplitter.setSizes([int(total_height * 0.8), int(total_height * 0.2)])
             
             # 设置日志文本框
             if hasattr(self.ui, 'logTextBrowser'):
@@ -229,12 +246,6 @@ class RecommendAnalysis(QMainWindow):
             # 视频数据刷新按钮
             if hasattr(self.ui, 'refreshDataButton'):
                 self.ui.refreshDataButton.clicked.connect(self.refresh_all_data)
-            
-            # 账号列表选择变化事件
-            if hasattr(self.ui, 'accountTable'):
-                self.ui.accountTable.itemSelectionChanged.connect(
-                    lambda: self.folder_manager.view_folders() if hasattr(self.folder_manager, 'view_folders') else None
-                )
             
             # 日志清空按钮
             if hasattr(self.ui, 'clearLogButton'):

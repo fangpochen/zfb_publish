@@ -6,7 +6,7 @@ import sys
 import traceback
 from datetime import datetime, timedelta
 from PyQt5.QtWidgets import (QMessageBox, QInputDialog, QFileDialog, 
-                            QTableWidgetItem, QHeaderView, QCheckBox)
+                            QTableWidgetItem, QHeaderView, QCheckBox, QPushButton, QWidget, QVBoxLayout, QLabel)
 from PyQt5.QtCore import Qt, QDate
 import json
 from PyQt5.QtGui import QBrush, QColor
@@ -41,10 +41,11 @@ class AccountManager:
         try:
             # 从数据库加载账号
             print("1. 从数据库读取账号数据...")
-            self.accounts = self.db.get_all_accounts()
+            self.accounts = self.db.load_accounts()
             
             if not self.accounts:
                 print("[警告] 未找到任何账号数据")
+                self.ui.accountTable.setRowCount(0)
                 return
                 
             print(f"2. 成功读取到 {len(self.accounts)} 个账号")
@@ -57,33 +58,37 @@ class AccountManager:
                 self.ui.accountTable.insertRow(i)
                 
                 # 第0列：复选框
-                checkbox_item = QTableWidgetItem()
-                checkbox_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-                checkbox_item.setCheckState(Qt.Checked)
-                self.ui.accountTable.setItem(i, 0, checkbox_item)
+                checkbox = QCheckBox()
+                checkbox.setChecked(True)  # 默认选中
+                checkbox_container = QWidget()
+                checkbox_layout = QVBoxLayout(checkbox_container)
+                checkbox_layout.addWidget(checkbox)
+                checkbox_layout.setAlignment(Qt.AlignCenter)
+                checkbox_layout.setContentsMargins(0, 0, 0, 0)
+                self.ui.accountTable.setCellWidget(i, 0, checkbox_container)
                 
                 # 第1列：序号
                 self.ui.accountTable.setItem(i, 1, QTableWidgetItem(str(i+1)))
                 
                 # 第2列：账号ID (appid)
-                self.ui.accountTable.setItem(i, 2, QTableWidgetItem(str(account[1])))
+                self.ui.accountTable.setItem(i, 2, QTableWidgetItem(str(account['appid'])))
                 
                 # 第3列：账号名称 (name)
-                self.ui.accountTable.setItem(i, 3, QTableWidgetItem(str(account[2])))
+                self.ui.accountTable.setItem(i, 3, QTableWidgetItem(str(account['name'])))
                 
                 # 第4列：今日视频数量 (today_videos)
-                self.ui.accountTable.setItem(i, 4, QTableWidgetItem(str(account[4] or '0')))
+                self.ui.accountTable.setItem(i, 4, QTableWidgetItem(str(account['today_videos'] or '0')))
                 
                 # 第5列：今日推荐数量 (today_recommended)
-                self.ui.accountTable.setItem(i, 5, QTableWidgetItem(str(account[5] or '0')))
+                self.ui.accountTable.setItem(i, 5, QTableWidgetItem(str(account['today_recommended'] or '0')))
                 
                 # 第6列：今日播放量 (today_views)
-                self.ui.accountTable.setItem(i, 6, QTableWidgetItem(str(account[6] or '0')))
+                self.ui.accountTable.setItem(i, 6, QTableWidgetItem(str(account['today_views'] or '0')))
                 
                 # 第7列：是否过画风 (pass_style)
-                pass_style = account[7]
+                pass_style = account['pass_style']
                 style_item = QTableWidgetItem()
-                if pass_style == 1:
+                if pass_style:
                     style_item.setText("通过")
                     style_item.setForeground(QBrush(QColor(0, 153, 0)))  # 绿色
                 else:
@@ -92,25 +97,84 @@ class AccountManager:
                 self.ui.accountTable.setItem(i, 7, style_item)
                 
                 # 第8列：Cookie状态 (cookies_status)
-                self.ui.accountTable.setItem(i, 8, QTableWidgetItem(str(account[11] or '')))
+                self.ui.accountTable.setItem(i, 8, QTableWidgetItem(str(account['cookies_status'] or '')))
                 
                 # 第9列：上传总数 (total_uploads)
-                self.ui.accountTable.setItem(i, 9, QTableWidgetItem(str(account[8] or '0')))
+                self.ui.accountTable.setItem(i, 9, QTableWidgetItem(str(account['total_uploads'] or '0')))
                 
                 # 第10列至第12列：其他字段 - 暂时留空
                 for col in range(10, 13):
                     self.ui.accountTable.setItem(i, col, QTableWidgetItem(''))
                 
-                # 第13列：是否是主账号 - 暂时留空
-                self.ui.accountTable.setItem(i, 13, QTableWidgetItem(''))
+                # 第13列和第14列：文件夹路径和视频数量
+                appid = account['appid']
                 
-                # 第14列：操作 - 暂时留空
-                self.ui.accountTable.setItem(i, 14, QTableWidgetItem(''))
+                # 尝试从folder_settings表获取完整信息
+                folder_info = None
+                if hasattr(self.db, 'get_folder_setting'):
+                    folder_info = self.db.get_folder_setting(appid)
                 
-                # 调整行高
-                self.ui.accountTable.setRowHeight(i, 30)
+                # 如果从folder_settings获取到了信息
+                if folder_info and folder_info.get('folder_path'):
+                    folder_path = folder_info.get('folder_path')
+                    video_count = folder_info.get('total_files', 0)
+                    
+                    # 设置文件夹路径到第13列 - 显示完整绝对路径
+                    folder_item = QTableWidgetItem(folder_path)
+                    folder_item.setToolTip(folder_path)
+                    self.ui.accountTable.setItem(i, 13, folder_item)
+                    
+                    # 设置视频数量到第14列
+                    count_item = QTableWidgetItem(f"{video_count}个")
+                    
+                    # 根据视频数量设置不同颜色
+                    if video_count > 10:
+                        count_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
+                    elif video_count > 0:
+                        count_item.setForeground(QBrush(QColor("#E6A23C")))  # 橙色
+                    else:
+                        count_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
+                        
+                    self.ui.accountTable.setItem(i, 14, count_item)
+                else:
+                    # 使用accounts表中的数据
+                    folder_path = account['folder_path'] or ''
+                    if folder_path:
+                        # 显示完整路径
+                        folder_item = QTableWidgetItem(folder_path)
+                        folder_item.setToolTip(folder_path)
+                        self.ui.accountTable.setItem(i, 13, folder_item)
+                        
+                        # 计算视频数量
+                        video_count = self._count_video_files(folder_path)
+                        count_item = QTableWidgetItem(f"{video_count}个")
+                        
+                        # 根据视频数量设置不同颜色
+                        if video_count > 10:
+                            count_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
+                        elif video_count > 0:
+                            count_item.setForeground(QBrush(QColor("#E6A23C")))  # 橙色
+                        else:
+                            count_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
+                            
+                        self.ui.accountTable.setItem(i, 14, count_item)
+                        
+                        # 同步更新到folder_settings表
+                        if hasattr(self.db, 'save_account_folder'):
+                            self.db.save_account_folder(appid, folder_path)
+                    else:
+                        self.ui.accountTable.setItem(i, 13, QTableWidgetItem('未设置'))
+                        self.ui.accountTable.setItem(i, 14, QTableWidgetItem('0'))
+                
+                # 第15列：添加设置文件夹按钮
+                self.add_folder_button_to_row(i)
+                
+            # 调整列宽
+            print("4. 调整列宽...")
+            self.ui.accountTable.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
             
-            print(f"=== 账号加载完成：共显示 {len(self.accounts)} 个账号 ===\n")
+            # 更新每个账号的画风信息
+            print("5. 更新完成")
             
         except Exception as e:
             print(f"[错误] 加载账号失败: {str(e)}")
@@ -468,4 +532,466 @@ class AccountManager:
         except Exception as e:
             self.log(f"获取子账号时出错: {str(e)}")
             traceback.print_exc()
-            QMessageBox.critical(self.parent, "获取子账号出错", f"获取子账号过程中出现错误: {str(e)}") 
+            QMessageBox.critical(self.parent, "获取子账号出错", f"获取子账号过程中出现错误: {str(e)}")
+    
+    def add_folder_button_to_row(self, row):
+        """为表格行添加文件夹按钮
+        
+        Args:
+            row: 表格行索引
+        """
+        try:
+            if not hasattr(self.ui, 'accountTable'):
+                return
+                
+            # 创建按钮
+            button = QPushButton("设置文件夹")
+            button.setProperty("type", "info")
+            button.setProperty("size", "small")
+            
+            # 设置点击事件
+            button.clicked.connect(lambda: self.select_folder_for_account(row))
+            
+            # 添加到表格
+            self.ui.accountTable.setCellWidget(row, 15, button)
+            
+        except Exception as e:
+            self.log(f"添加文件夹按钮失败: {str(e)}")
+            traceback.print_exc()
+    
+    def select_folder_for_account(self, row):
+        """为指定账号选择文件夹
+        
+        Args:
+            row: 表格行索引
+        """
+        try:
+            if not hasattr(self.ui, 'accountTable'):
+                return
+                
+            # 获取账号ID
+            appid_item = self.ui.accountTable.item(row, 2)
+            if not appid_item:
+                self.log("无法获取账号ID")
+                return
+                
+            appid = appid_item.text()
+            
+            # 打开文件夹选择对话框
+            folder_path = QFileDialog.getExistingDirectory(
+                self.parent,
+                "选择视频文件夹",
+                "",
+                QFileDialog.ShowDirsOnly
+            )
+            
+            if not folder_path:
+                self.log("未选择文件夹")
+                return
+                
+            # 设置账号文件夹
+            if self.set_account_folder(appid, folder_path):
+                # 获取已保存的文件夹信息（包括视频数量）
+                folder_info = None
+                if hasattr(self.db, 'get_folder_setting'):
+                    folder_info = self.db.get_folder_setting(appid, folder_path)
+                
+                if folder_info and folder_info.get('folder_path') and 'total_files' in folder_info:
+                    # 使用数据库中的信息
+                    folder_path = folder_info.get('folder_path')
+                    video_count = folder_info.get('total_files', 0)
+                    
+                    # 更新文件夹路径列 - 显示完整绝对路径
+                    folder_item = QTableWidgetItem(folder_path)
+                    folder_item.setToolTip(folder_path)
+                    self.ui.accountTable.setItem(row, 13, folder_item)
+                    
+                    # 更新视频数量列
+                    count_item = QTableWidgetItem(f"{video_count}个")
+                    
+                    # 根据视频数量设置不同颜色
+                    if video_count > 10:
+                        count_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
+                    elif video_count > 0:
+                        count_item.setForeground(QBrush(QColor("#E6A23C")))  # 橙色
+                    else:
+                        count_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
+                        
+                    self.ui.accountTable.setItem(row, 14, count_item)
+                else:
+                    # 手动计算并显示
+                    # 更新文件夹路径列 - 显示完整绝对路径
+                    folder_item = QTableWidgetItem(folder_path)
+                    folder_item.setToolTip(folder_path)
+                    self.ui.accountTable.setItem(row, 13, folder_item)
+                    
+                    # 更新视频数量列
+                    video_count = self._count_video_files(folder_path)
+                    count_item = QTableWidgetItem(f"{video_count}个")
+                    
+                    # 根据视频数量设置不同颜色
+                    if video_count > 10:
+                        count_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
+                    elif video_count > 0:
+                        count_item.setForeground(QBrush(QColor("#E6A23C")))  # 橙色
+                    else:
+                        count_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
+                        
+                    self.ui.accountTable.setItem(row, 14, count_item)
+                
+                self.log(f"已为账号 {appid} 设置文件夹: {folder_path}，视频数量: {video_count}个")
+            else:
+                self.log(f"设置账号 {appid} 的文件夹失败")
+                
+        except Exception as e:
+            self.log(f"选择文件夹时出错: {str(e)}")
+            traceback.print_exc()
+    
+    def set_account_folder(self, appid, folder_path):
+        """设置账号的上传文件夹
+        
+        Args:
+            appid: 账号ID
+            folder_path: 文件夹路径
+            
+        Returns:
+            bool: 是否设置成功
+        """
+        try:
+            # 首先检查文件夹是否存在
+            if not os.path.exists(folder_path):
+                self.log(f"文件夹不存在: {folder_path}")
+                return False
+                
+            # 保存到数据库
+            if hasattr(self.db, 'save_account_folder'):
+                success = self.db.save_account_folder(appid, folder_path)
+                if success:
+                    self.log(f"成功设置账号 {appid} 的文件夹: {folder_path}")
+                    return True
+                else:
+                    self.log(f"保存账号文件夹失败: {appid} -> {folder_path}")
+                    return False
+            else:
+                self.log("数据库管理器缺少save_account_folder方法")
+                return False
+                
+        except Exception as e:
+            self.log(f"设置账号文件夹时出错: {str(e)}")
+            traceback.print_exc()
+            return False
+    
+    def get_account_folder(self, appid):
+        """获取账号的上传文件夹路径
+        
+        Args:
+            appid: 账号ID
+            
+        Returns:
+            dict: 文件夹信息，包含路径和视频数量
+        """
+        try:
+            # 从数据库获取
+            if hasattr(self.db, 'get_account_folder'):
+                folder_info = self.db.get_account_folder(appid)
+                
+                # 验证文件夹是否存在
+                if folder_info and folder_info.get('folder_path') and os.path.exists(folder_info.get('folder_path')):
+                    return folder_info
+                    
+                return None
+            else:
+                self.log("数据库管理器缺少get_account_folder方法")
+                return None
+                
+        except Exception as e:
+            self.log(f"获取账号文件夹时出错: {str(e)}")
+            traceback.print_exc()
+            return None
+    
+    def show_folder_info(self, row, folder_path):
+        """在表格中显示文件夹信息
+        
+        Args:
+            row: 表格行索引
+            folder_path: 文件夹路径
+        """
+        try:
+            if not hasattr(self.ui, 'accountTable'):
+                return
+                
+            # 获取行的appid
+            appid_item = self.ui.accountTable.item(row, 2)
+            if not appid_item:
+                self.log("无法获取账号ID")
+                return
+                
+            appid = appid_item.text()
+            
+            # 尝试从folder_settings表获取完整信息
+            folder_info = None
+            if hasattr(self.db, 'get_folder_setting'):
+                folder_info = self.db.get_folder_setting(appid, folder_path)
+            
+            # 如果没有获取到信息，则手动计算视频数量
+            if folder_info and 'total_files' in folder_info:
+                video_count = folder_info.get('total_files', 0)
+            else:
+                # 获取文件夹中的视频文件数量
+                video_count = self._count_video_files(folder_path)
+            
+            # 设置文件夹路径到第13列 - 显示完整绝对路径
+            folder_item = QTableWidgetItem(folder_path)
+            folder_item.setToolTip(folder_path)  # 完整路径显示在悬停提示中
+            self.ui.accountTable.setItem(row, 13, folder_item)
+            
+            # 设置视频数量到第14列
+            count_item = QTableWidgetItem(f"{video_count}个")
+            
+            # 根据视频数量设置不同颜色
+            if video_count > 10:
+                count_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
+            elif video_count > 0:
+                count_item.setForeground(QBrush(QColor("#E6A23C")))  # 橙色
+            else:
+                count_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
+                
+            self.ui.accountTable.setItem(row, 14, count_item)
+            
+        except Exception as e:
+            self.log(f"显示文件夹信息失败: {str(e)}")
+            traceback.print_exc()
+            # 设置一个简单的错误信息
+            self.ui.accountTable.setItem(row, 13, QTableWidgetItem("显示失败"))
+            self.ui.accountTable.setItem(row, 14, QTableWidgetItem("0"))
+    
+    def _count_video_files(self, folder_path):
+        """计算文件夹中的视频文件数量
+        
+        Args:
+            folder_path: 文件夹路径
+            
+        Returns:
+            int: 视频文件数量
+        """
+        try:
+            if not folder_path or not os.path.exists(folder_path):
+                return 0
+                
+            video_extensions = ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv']
+            count = 0
+            
+            for file in os.listdir(folder_path):
+                file_path = os.path.join(folder_path, file)
+                if os.path.isfile(file_path):
+                    ext = os.path.splitext(file)[1].lower()
+                    if ext in video_extensions:
+                        count += 1
+            
+            return count
+        except Exception as e:
+            self.log(f"计算视频文件数量失败: {str(e)}")
+            traceback.print_exc()
+            return 0
+    
+    def _add_folder_support_to_db(self):
+        """向数据库管理器添加文件夹支持功能"""
+        try:
+            # 添加save_account_folder方法
+            def save_account_folder(self, appid, folder_path):
+                """保存账号的上传文件夹路径
+                
+                Args:
+                    appid: 账号ID
+                    folder_path: 文件夹路径
+                    
+                Returns:
+                    bool: 是否保存成功
+                """
+                try:
+                    conn = self.get_connection()
+                    cursor = conn.cursor()
+                    
+                    # 检查account_folders表是否存在
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='account_folders'")
+                    if not cursor.fetchone():
+                        # 创建表
+                        cursor.execute('''
+                            CREATE TABLE account_folders (
+                                appid TEXT PRIMARY KEY,
+                                folder_path TEXT,
+                                create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                            )
+                        ''')
+                    
+                    # 插入或更新记录
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO account_folders (appid, folder_path)
+                        VALUES (?, ?)
+                    ''', (appid, folder_path))
+                    
+                    conn.commit()
+                    conn.close()
+                    return True
+                    
+                except Exception as e:
+                    print(f"保存账号文件夹失败: {str(e)}")
+                    traceback.print_exc()
+                    return False
+            
+            # 添加get_account_folder方法
+            def get_account_folder(self, appid):
+                """获取账号的上传文件夹路径
+                
+                Args:
+                    appid: 账号ID
+                    
+                Returns:
+                    str: 文件夹路径，如果未设置则返回None
+                """
+                try:
+                    conn = self.get_connection()
+                    cursor = conn.cursor()
+                    
+                    # 检查account_folders表是否存在
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='account_folders'")
+                    if not cursor.fetchone():
+                        # 表不存在，返回None
+                        conn.close()
+                        return None
+                    
+                    # 查询文件夹路径
+                    cursor.execute('SELECT folder_path FROM account_folders WHERE appid = ?', (appid,))
+                    result = cursor.fetchone()
+                    
+                    conn.close()
+                    return result[0] if result else None
+                    
+                except Exception as e:
+                    print(f"获取账号文件夹失败: {str(e)}")
+                    traceback.print_exc()
+                    return None
+            
+            # 添加get_all_account_folders方法
+            def get_all_account_folders(self):
+                """获取所有账号的文件夹设置
+                
+                Returns:
+                    dict: 账号ID与文件夹路径的映射字典
+                """
+                try:
+                    conn = self.get_connection()
+                    cursor = conn.cursor()
+                    
+                    # 检查account_folders表是否存在
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='account_folders'")
+                    if not cursor.fetchone():
+                        # 表不存在，返回空字典
+                        conn.close()
+                        return {}
+                    
+                    # 查询所有账号的文件夹路径
+                    cursor.execute('SELECT appid, folder_path FROM account_folders')
+                    results = cursor.fetchall()
+                    
+                    conn.close()
+                    return {row[0]: row[1] for row in results}
+                    
+                except Exception as e:
+                    print(f"获取所有账号文件夹失败: {str(e)}")
+                    traceback.print_exc()
+                    return {}
+            
+            # 将方法绑定到db_manager对象
+            import types
+            self.db.save_account_folder = types.MethodType(save_account_folder, self.db)
+            self.db.get_account_folder = types.MethodType(get_account_folder, self.db)
+            self.db.get_all_account_folders = types.MethodType(get_all_account_folders, self.db)
+            
+            # 确保表存在
+            self.db.save_account_folder("test", "test")
+            
+            self.log("成功添加文件夹支持功能到数据库管理器")
+            
+        except Exception as e:
+            self.log(f"添加文件夹支持功能失败: {str(e)}")
+            traceback.print_exc()
+            
+    def get_selected_accounts_with_folders(self):
+        """获取选中的账号及其文件夹信息
+        
+        Returns:
+            dict: 账号与其文件夹、cookies的映射字典 {appid: {'folder': folder_path, 'cookies': cookies}}
+        """
+        try:
+            if not hasattr(self.ui, 'accountTable'):
+                return {}
+                
+            account_folders = {}
+            for row in range(self.ui.accountTable.rowCount()):
+                # 检查是否选中
+                checkbox_item = self.ui.accountTable.cellWidget(row, 0)
+                if not checkbox_item or not hasattr(checkbox_item, 'isChecked') or not checkbox_item.isChecked():
+                    continue
+                    
+                # 获取appid
+                appid_item = self.ui.accountTable.item(row, 2)
+                if not appid_item:
+                    continue
+                    
+                appid = appid_item.text()
+                
+                # 获取文件夹路径
+                folder_path = self.get_account_folder(appid)
+                if not folder_path:
+                    continue
+                    
+                # 获取cookies
+                cookies = self.get_account_cookies(appid)
+                if not cookies:
+                    continue
+                    
+                account_folders[appid] = {
+                    'folder': folder_path,
+                    'cookies': cookies
+                }
+                
+            return account_folders
+            
+        except Exception as e:
+            self.log(f"获取选中账号文件夹失败: {str(e)}")
+            traceback.print_exc()
+            return {}
+    
+    def get_account_cookies(self, appid):
+        """获取指定账号的cookies
+        
+        Args:
+            appid: 账号ID
+            
+        Returns:
+            dict: cookies数据，如果未找到则返回None
+        """
+        try:
+            if hasattr(self.db, 'get_account_cookies'):
+                return self.db.get_account_cookies(appid)
+            else:
+                # 直接从数据库获取
+                conn = self.db.get_connection()
+                cursor = conn.cursor()
+                
+                cursor.execute('SELECT cookies FROM accounts WHERE appid = ?', (appid,))
+                result = cursor.fetchone()
+                conn.close()
+                
+                if result and result[0]:
+                    try:
+                        return json.loads(result[0])
+                    except:
+                        return result[0]  # 如果不是JSON格式，直接返回字符串
+                return None
+                
+        except Exception as e:
+            self.log(f"获取账号cookies失败: {str(e)}")
+            traceback.print_exc()
+            return None 
