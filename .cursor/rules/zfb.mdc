@@ -1,0 +1,13 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# Your rule content
+
+- You can @ files here
+- You can use markdown but dont have to
+- 我现在要重构这个项目
+- 这是一个支付宝的上传和视频分析app
+- 请你参考zfb 文件，也不依赖它，后面完成重构后要删除
