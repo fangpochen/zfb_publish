@@ -55,6 +55,14 @@ class UploadController:
         self.account_manager = account_manager
         self.log_callback = log_callback or print
         
+        # 保存主窗口引用，避免跨方法引用不一致
+        self.main_window = None
+        if QApplication.instance() and QApplication.instance().activeWindow():
+            self.main_window = QApplication.instance().activeWindow()
+        
+        # 创建自己的话题信息存储，避免依赖主窗口
+        self.current_topic_info = None
+        
         # 获取数据库引用
         self.db = None
         if account_manager and hasattr(account_manager, 'db'):
@@ -355,38 +363,59 @@ class UploadController:
         
         Returns:
             list: 话题列表或话题信息对象
+            
+        Raises:
+            Exception: 如果无法获取有效的话题ID则抛出异常
         """
-        # 尝试从主窗口获取完整的话题信息
+        # 首先检查控制器自己存储的话题信息
+        if self.current_topic_info and 'topicInfoVOList' in self.current_topic_info:
+            # 验证话题ID是否存在且不为空
+            for topic in self.current_topic_info['topicInfoVOList']:
+                if 'topicId' not in topic or not topic['topicId'].strip():
+                    raise Exception("话题信息中缺少有效的topicId，请重新搜索并选择话题")
+            self.log_message(f"使用控制器中保存的话题信息: {self.current_topic_info}")
+            return self.current_topic_info
+        
+        # 如果控制器没有保存，尝试从主窗口获取
+        # 先使用初始化时保存的主窗口引用
+        if self.main_window and hasattr(self.main_window, 'current_topic_info'):
+            topics_info = self.main_window.current_topic_info
+            if topics_info and 'topicInfoVOList' in topics_info:
+                # 验证话题ID是否存在且不为空
+                for topic in topics_info['topicInfoVOList']:
+                    if 'topicId' not in topic or not topic['topicId'].strip():
+                        raise Exception("话题信息中缺少有效的topicId，请重新搜索并选择话题")
+                # 同时保存到控制器自己的存储中，确保一致性
+                self.current_topic_info = topics_info
+                self.log_message(f"使用保存的主窗口中的话题信息: {topics_info}")
+                return topics_info
+        
+        # 如果保存的主窗口引用无效，尝试重新获取主窗口
         from PyQt5.QtWidgets import QApplication
         if QApplication.instance() and QApplication.instance().activeWindow():
             main_window = QApplication.instance().activeWindow()
+            # 更新主窗口引用
+            self.main_window = main_window
             if hasattr(main_window, 'current_topic_info'):
                 topics_info = main_window.current_topic_info
-                if topics_info:
-                    self.log_message(f"使用主窗口中的话题信息: {topics_info}")
+                if topics_info and 'topicInfoVOList' in topics_info:
+                    # 验证话题ID是否存在且不为空
+                    for topic in topics_info['topicInfoVOList']:
+                        if 'topicId' not in topic or not topic['topicId'].strip():
+                            raise Exception("话题信息中缺少有效的topicId，请重新搜索并选择话题")
+                    # 保存到控制器自己的存储中
+                    self.current_topic_info = topics_info
+                    self.log_message(f"使用重新获取主窗口中的话题信息: {topics_info}")
                     return topics_info
         
-        # 如果没有从主窗口获取到话题信息，则从UI获取文本形式的话题
+        # 如果没有从任何地方获取到话题信息，则从UI获取文本形式的话题
         if hasattr(self.upload_ui, 'topic_search_input'):
             topic_text = self.upload_ui.topic_search_input.text().strip()
             if topic_text:
-                # 分割话题并保留#符号
-                topics = []
-                for topic in topic_text.split(','):
-                    topic = topic.strip()
-                    if not topic:
-                        continue
-                    # 确保话题格式正确（前后都有#号）
-                    if not topic.startswith('#'):
-                        topic = '#' + topic
-                    if not topic.endswith('#'):
-                        topic = topic + '#'
-                    topics.append(topic)
-                
-                self.log_message(f"使用文本输入框的话题列表: {topics}")
-                return topics
+                # 这种情况下没有话题ID，需要提示用户执行搜索
+                raise Exception("找不到话题ID信息，请先点击'搜索'按钮搜索并选择话题")
         
-        return []
+        raise Exception("未设置任何话题，请先搜索并选择话题")
     
     def set_topics(self, topics):
         """设置话题到UI
@@ -432,7 +461,7 @@ class UploadController:
                 self.log_message(f"设置话题: {topic_text}")
     
     def search_topics(self):
-        """搜索话题"""
+        """搜索话题并保存到内存中供发布使用"""
         try:
             # 获取搜索关键词
             if not hasattr(self.upload_ui, 'topic_search_input') or not self.account_manager:
@@ -479,7 +508,18 @@ class UploadController:
             try:
                 topics = self.api_client.search_topics(cookies, appid, keyword)
                 
-                if topics is not None:
+                if topics is not None and len(topics) > 0:
+                    # 验证返回的话题是否包含必要的ID信息
+                    has_valid_id = False
+                    for topic in topics:
+                        if topic.get('topicId') or topic.get('id'):
+                            has_valid_id = True
+                            break
+                    
+                    if not has_valid_id:
+                        QMessageBox.warning(self.parent, "话题搜索", "API返回的话题数据中缺少话题ID信息")
+                        return
+                        
                     self.log_message(f"搜索到 {len(topics)} 个话题")
                     self.show_topic_selection_dialog(topics)
                 else:
@@ -561,7 +601,7 @@ class UploadController:
                     topic_info_list = []
                     for topic in selected_topics:
                         topic_display = topic.get('display', '')  # 显示用
-                        topic_id = topic.get('topicId', '')  # 保存topicId
+                        topic_id = topic.get('topicId', '') or topic.get('id', '')  # 优先使用topicId，否则使用id
                         topic_name = topic.get('name', '')
                         
                         # 记录话题的不同格式
@@ -569,6 +609,11 @@ class UploadController:
                         
                         if not topic_display and topic_name:
                             topic_display = f"#{topic_name}#"
+                        
+                        # 验证话题ID是否有效
+                        if not topic_id.strip():
+                            QMessageBox.warning(self.parent, "话题选择", f"话题 '{topic_display}' 缺少有效的ID，无法添加")
+                            continue
                         
                         if topic_display:
                             # 添加到UI显示列表
@@ -584,16 +629,28 @@ class UploadController:
                             topic_info_list.append(topic_info)
                             self.log_message(f"添加话题信息: {json.dumps(topic_info, ensure_ascii=False)}")
                     
+                    # 检查是否有有效话题被添加
+                    if not topic_info_list:
+                        QMessageBox.warning(self.parent, "话题选择", "未能添加任何有效话题，请重新选择")
+                        return
+                    
                     # 更新UI显示
                     self.set_topics(current_topics)
                     
                     # 保存完整话题信息到主窗口
+                    topic_info_obj = {
+                        'topicInfoVOList': topic_info_list
+                    }
+                    
+                    # 首先保存到控制器自己的存储中
+                    self.current_topic_info = topic_info_obj
+                    self.log_message(f"已保存话题信息到控制器: {json.dumps(topic_info_obj, ensure_ascii=False)}")
+                    
+                    # 尝试保存到主窗口
                     from PyQt5.QtWidgets import QApplication
                     if QApplication.instance() and QApplication.instance().activeWindow():
                         main_window = QApplication.instance().activeWindow()
-                        topic_info_obj = {
-                            'topicInfoVOList': topic_info_list
-                        }
+                        self.main_window = main_window  # 更新主窗口引用
                         main_window.current_topic_info = topic_info_obj
                         self.log_message(f"已保存完整话题信息到主窗口: {json.dumps(topic_info_obj, ensure_ascii=False)}")
                     
@@ -613,7 +670,7 @@ class UploadController:
                                 self.log_message(f"选中项话题原始信息: {json.dumps(topic, ensure_ascii=False)}")
                                 
                                 topic_display = topic.get('display', '')
-                                topic_id = topic.get('id', '')  # 保存topicId
+                                topic_id = topic.get('id', '') or topic.get('topicId', '')  # 优先使用id，否则使用topicId
                                 topic_name = topic.get('name', '')
                                 
                                 # 记录话题的不同格式
@@ -622,6 +679,11 @@ class UploadController:
                                 if not topic_display and topic_name:
                                     topic_display = f"#{topic_name}#"
                                 
+                                # 验证话题ID是否有效
+                                if not topic_id.strip():
+                                    QMessageBox.warning(self.parent, "话题选择", f"话题 '{topic_display}' 缺少有效的ID，无法添加")
+                                    continue
+                                    
                                 if topic_display:
                                     # 添加到UI显示列表
                                     if topic_display not in current_topics:
@@ -636,16 +698,28 @@ class UploadController:
                                     topic_info_list.append(topic_info)
                                     self.log_message(f"添加选中项话题信息: {json.dumps(topic_info, ensure_ascii=False)}")
                         
+                        # 检查是否有有效话题被添加
+                        if not topic_info_list:
+                            QMessageBox.warning(self.parent, "话题选择", "未能添加任何有效话题，请重新选择")
+                            return
+                            
                         # 更新UI显示
                         self.set_topics(current_topics)
                         
-                        # 保存完整话题信息到主窗口
+                        # 保存完整话题信息
+                        topic_info_obj = {
+                            'topicInfoVOList': topic_info_list
+                        }
+                        
+                        # 首先保存到控制器自己的存储中
+                        self.current_topic_info = topic_info_obj
+                        self.log_message(f"已保存选中项话题信息到控制器: {json.dumps(topic_info_obj, ensure_ascii=False)}")
+                        
+                        # 尝试保存到主窗口
                         from PyQt5.QtWidgets import QApplication
                         if QApplication.instance() and QApplication.instance().activeWindow():
                             main_window = QApplication.instance().activeWindow()
-                            topic_info_obj = {
-                                'topicInfoVOList': topic_info_list
-                            }
+                            self.main_window = main_window  # 更新主窗口引用
                             main_window.current_topic_info = topic_info_obj
                             self.log_message(f"已保存选中项话题信息到主窗口: {json.dumps(topic_info_obj, ensure_ascii=False)}")
                         
