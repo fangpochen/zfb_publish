@@ -318,64 +318,6 @@ class UploadProcessor:
             traceback.print_exc()
             return None
     
-    def batch_add_tasks(self, account, file_list, cover_path=None, use_random_cover=False, topics=None, 
-                       schedule_time=None, manual_title=None, manual_desc=None, art_text_settings=None):
-        """批量添加上传任务
-        
-        Args:
-            account: 账号信息
-            file_list: 文件路径列表
-            cover_path: 封面图片路径，可选
-            use_random_cover: 是否使用随机封面
-            topics: 话题列表
-            schedule_time: 定时发布时间
-            manual_title: 手动设置的标题
-            manual_desc: 手动设置的描述
-            art_text_settings: 艺术字设置，包含文本、样式、颜色等
-            
-        Returns:
-            list: 创建的任务对象列表
-        """
-        try:
-            # 检查参数
-            if not account:
-                self.logger.error("缺少账号信息，无法添加批量任务")
-                return []
-            
-            # 获取账号ID
-            appid = account.get('appid')
-            if not appid:
-                self.logger.error(f"获取账号ID失败，无法添加批量任务: {account}")
-                return []
-            
-            # 创建任务列表
-            tasks = []
-            for file_path in file_list:
-                # 添加任务
-                task = self.add_task(
-                    account=account,
-                    file_path=file_path,
-                    cover_path=cover_path,
-                    use_random_cover=use_random_cover,
-                    topics=topics,
-                    schedule_time=schedule_time,
-                    manual_title=manual_title,
-                    manual_desc=manual_desc,
-                    is_batch=True,
-                    art_text_settings=art_text_settings
-                )
-                
-                if task:
-                    tasks.append(task)
-            
-            self.logger.info(f"批量添加 {len(tasks)}/{len(file_list)} 个任务")
-            return tasks
-            
-        except Exception as e:
-            self.logger.error(f"批量添加任务时出错: {str(e)}")
-            traceback.print_exc()
-            return []
-    
     def _main_loop(self):
         """主循环，处理队列和任务分发"""
         self.logger.info("上传处理器主循环已启动")
