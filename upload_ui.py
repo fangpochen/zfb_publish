@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QHeaderView, QAbstractItemView, QComboBox, QMessageBox, QSplitter
 )
 from PyQt5.QtCore import Qt, QTime, QSize
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QFont, QColor, QPen, QBrush, QFontDatabase
 import datetime
 
 class UploadUI(QWidget):
@@ -23,6 +23,13 @@ class UploadUI(QWidget):
         """
         super().__init__(parent)
         self.parent = parent
+        
+        # 注册字体(如果需要自定义字体)
+        self.available_fonts = []
+        font_db = QFontDatabase()
+        self.available_fonts = font_db.families()
+        
+        # 初始化UI
         self.init_ui()
         
     def init_ui(self):
@@ -224,6 +231,9 @@ class UploadUI(QWidget):
         use_random_cover = self.random_cover_checkbox.isChecked()
         cover_path = None if use_random_cover else self.cover_path_input.text()
         
+        # 添加艺术字设置
+        art_text_settings = self.get_art_text_settings()
+        
         return {
             "max_uploads": self.upload_count_input.value(),
             "thread_count": self.thread_count_input.value(),
@@ -231,7 +241,8 @@ class UploadUI(QWidget):
             "schedule_type": schedule_type,
             "schedule_time": schedule_time,
             "use_random_cover": use_random_cover,
-            "cover_path": cover_path
+            "cover_path": cover_path,
+            "art_text": art_text_settings
         }
     
     def set_upload_in_progress(self, in_progress):
@@ -263,6 +274,14 @@ class UploadUI(QWidget):
         self.cover_path_input.setEnabled(not in_progress)
         self.select_cover_button.setEnabled(not in_progress)
         self.random_cover_checkbox.setEnabled(not in_progress)
+        
+        # 禁用/启用艺术字设置控件
+        self.art_text_input.setEnabled(not in_progress)
+        self.art_style_combo.setEnabled(not in_progress)
+        self.font_size_spin.setEnabled(not in_progress)
+        self.text_color_combo.setEnabled(not in_progress)
+        self.text_position_combo.setEnabled(not in_progress)
+        self.preview_art_text_button.setEnabled(not in_progress)
         
     def fill_current_time(self):
         """自动填入当前时间到Web定时发布时间输入框"""
@@ -296,11 +315,72 @@ class UploadUI(QWidget):
         
         cover_layout.addLayout(select_cover_layout)
         
-        # 添加预览区域（后续可添加图片预览功能）
-        preview_label = QLabel("封面预览区域")
-        preview_label.setAlignment(Qt.AlignCenter)
-        preview_label.setStyleSheet("background-color: #f5f5f5; border: 1px dashed #dcdfe6; min-height: 150px;")
-        cover_layout.addWidget(preview_label)
+        # 添加艺术字设置区域
+        art_text_group = QGroupBox("艺术字设置")
+        art_text_layout = QVBoxLayout()
+        
+        # 艺术字文本输入
+        text_input_layout = QHBoxLayout()
+        text_input_layout.addWidget(QLabel("文本内容:"))
+        self.art_text_input = QLineEdit()
+        self.art_text_input.setPlaceholderText("输入要添加的艺术字...")
+        text_input_layout.addWidget(self.art_text_input)
+        art_text_layout.addLayout(text_input_layout)
+        
+        # 艺术字样式选择
+        style_layout = QHBoxLayout()
+        style_layout.addWidget(QLabel("字体样式:"))
+        self.art_style_combo = QComboBox()
+        # 添加不同的艺术字样式
+        self.art_style_combo.addItems(["标准", "艺术风格一", "艺术风格二", "霓虹灯", "复古", "水墨风", "书法", "华丽花体"])
+        style_layout.addWidget(self.art_style_combo)
+        art_text_layout.addLayout(style_layout)
+        
+        # 字体大小选择
+        size_layout = QHBoxLayout()
+        size_layout.addWidget(QLabel("字体大小:"))
+        self.font_size_spin = QSpinBox()
+        self.font_size_spin.setRange(12, 72)
+        self.font_size_spin.setValue(36)
+        self.font_size_spin.setSingleStep(2)
+        size_layout.addWidget(self.font_size_spin)
+        art_text_layout.addLayout(size_layout)
+        
+        # 字体颜色选择
+        color_layout = QHBoxLayout()
+        color_layout.addWidget(QLabel("字体颜色:"))
+        self.text_color_combo = QComboBox()
+        self.text_color_combo.addItems(["白色", "黑色", "红色", "蓝色", "绿色", "黄色", "粉色", "紫色", "橙色"])
+        self.text_color_combo.setCurrentText("白色")  # 默认白色
+        color_layout.addWidget(self.text_color_combo)
+        art_text_layout.addLayout(color_layout)
+        
+        # 艺术字位置选择
+        position_layout = QHBoxLayout()
+        position_layout.addWidget(QLabel("文字位置:"))
+        self.text_position_combo = QComboBox()
+        self.text_position_combo.addItems(["顶部居中", "底部居中", "左上", "右上", "左下", "右下", "居中"])
+        self.text_position_combo.setCurrentText("底部居中")  # 默认底部居中
+        position_layout.addWidget(self.text_position_combo)
+        art_text_layout.addLayout(position_layout)
+        
+        # 添加艺术字预览按钮
+        preview_button_layout = QHBoxLayout()
+        self.preview_art_text_button = QPushButton("预览艺术字效果")
+        self.preview_art_text_button.setProperty("type", "info")
+        self.preview_art_text_button.clicked.connect(self.preview_art_text)
+        preview_button_layout.addWidget(self.preview_art_text_button)
+        art_text_layout.addLayout(preview_button_layout)
+        
+        art_text_group.setLayout(art_text_layout)
+        cover_layout.addWidget(art_text_group)
+        
+        # 添加预览区域
+        self.preview_label = QLabel("封面预览区域")
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setStyleSheet("background-color: #f5f5f5; border: 1px dashed #dcdfe6; min-height: 180px;")
+        self.preview_label.setMinimumSize(320, 180)  # 设置一个合适的预览大小
+        cover_layout.addWidget(self.preview_label)
         
         # 添加使用随机封面选项
         random_cover_layout = QHBoxLayout()
@@ -324,4 +404,240 @@ class UploadUI(QWidget):
         if file_path:
             self.cover_path_input.setText(file_path)
             self.random_cover_checkbox.setChecked(False)
-            # TODO: 显示图片预览 
+            
+            # 显示图片预览
+            try:
+                pixmap = QPixmap(file_path)
+                if not pixmap.isNull():
+                    # 如果已有艺术字文本，则显示带艺术字的预览
+                    text = self.art_text_input.text()
+                    if text:
+                        preview_image = self.generate_art_text_preview(file_path, text)
+                        if preview_image:
+                            self.show_preview_image(preview_image)
+                            return
+                    
+                    # 否则只显示原图预览
+                    self.show_preview_image(pixmap)
+                else:
+                    self.preview_label.clear()
+                    self.preview_label.setText("封面预览区域")
+                    QMessageBox.warning(self.parent, "预览提示", "无法加载图片，请检查图片格式！")
+            except Exception as e:
+                print(f"预览图片时出错: {str(e)}")
+                self.preview_label.clear()
+                self.preview_label.setText("封面预览区域")
+
+    def preview_art_text(self):
+        """预览添加艺术字效果的封面"""
+        try:
+            # 检查是否选择了封面图片
+            cover_path = self.cover_path_input.text()
+            if not cover_path or not os.path.exists(cover_path):
+                QMessageBox.warning(self.parent, "预览提示", "请先选择封面图片！")
+                return
+                
+            # 获取艺术字设置
+            text = self.art_text_input.text()
+            if not text:
+                QMessageBox.warning(self.parent, "预览提示", "请输入艺术字文本！")
+                return
+                
+            # 生成艺术字预览图像
+            preview_image = self.generate_art_text_preview(cover_path, text)
+            if preview_image:
+                # 显示预览图像
+                self.show_preview_image(preview_image)
+            else:
+                QMessageBox.warning(self.parent, "预览失败", "生成预览图像失败，请检查图片格式！")
+        except Exception as e:
+            print(f"预览艺术字效果时出错: {str(e)}")
+            QMessageBox.critical(self.parent, "预览错误", f"预览过程中发生错误: {str(e)}")
+            
+    def generate_art_text_preview(self, image_path, text):
+        """生成添加艺术字的预览图像
+        
+        Args:
+            image_path: 图片路径
+            text: 文本内容
+            
+        Returns:
+            QPixmap: 生成的预览图像
+        """
+        try:
+            # 加载原始图像
+            pixmap = QPixmap(image_path)
+            if pixmap.isNull():
+                return None
+                
+            # 创建副本用于绘制
+            preview = pixmap.copy()
+            
+            # 创建绘图对象
+            painter = QPainter(preview)
+            
+            # 获取艺术字设置
+            style = self.art_style_combo.currentText()
+            font_size = self.font_size_spin.value()
+            color_name = self.text_color_combo.currentText()
+            position = self.text_position_combo.currentText()
+            
+            # 设置字体
+            font = QFont()
+            # 根据选择的样式设置不同的字体
+            if style == "标准":
+                font.setFamily("微软雅黑")
+            elif style == "艺术风格一":
+                font.setFamily("华文琥珀")
+                font.setBold(True)
+            elif style == "艺术风格二":
+                font.setFamily("方正舒体")
+            elif style == "霓虹灯":
+                font.setFamily("Arial")
+                font.setBold(True)
+            elif style == "复古":
+                font.setFamily("华文新魏")
+            elif style == "水墨风":
+                font.setFamily("楷体")
+            elif style == "书法":
+                font.setFamily("隶书")
+            elif style == "华丽花体":
+                font.setFamily("华文行楷")
+                
+            font.setPointSize(font_size)
+            painter.setFont(font)
+            
+            # 设置颜色
+            color_map = {
+                "白色": QColor(255, 255, 255),
+                "黑色": QColor(0, 0, 0),
+                "红色": QColor(255, 0, 0),
+                "蓝色": QColor(0, 0, 255),
+                "绿色": QColor(0, 255, 0),
+                "黄色": QColor(255, 255, 0),
+                "粉色": QColor(255, 192, 203),
+                "紫色": QColor(128, 0, 128),
+                "橙色": QColor(255, 165, 0)
+            }
+            text_color = color_map.get(color_name, QColor(255, 255, 255))
+            
+            # 特殊风格处理
+            if style == "霓虹灯":
+                # 霓虹灯效果添加发光边缘
+                glow_color = QColor(text_color)
+                glow_color.setAlpha(80)
+                painter.setPen(QPen(glow_color, 4))
+                
+                # 根据位置计算文本位置并绘制发光效果
+                x, y = self.calculate_text_position(preview, text, position, painter)
+                painter.drawText(x-1, y-1, text)
+                painter.drawText(x+1, y-1, text)
+                painter.drawText(x-1, y+1, text)
+                painter.drawText(x+1, y+1, text)
+                
+                # 绘制主要文本
+                painter.setPen(QPen(text_color, 1))
+            else:
+                painter.setPen(text_color)
+            
+            # 计算文本位置并绘制
+            x, y = self.calculate_text_position(preview, text, position, painter)
+            painter.drawText(x, y, text)
+            
+            # 结束绘制
+            painter.end()
+            
+            return preview
+            
+        except Exception as e:
+            print(f"生成艺术字预览时出错: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
+            
+    def calculate_text_position(self, pixmap, text, position, painter):
+        """计算文本在图像上的位置
+        
+        Args:
+            pixmap: 图像
+            text: 文本内容
+            position: 位置描述
+            painter: 绘图对象
+            
+        Returns:
+            tuple: (x, y) 文本位置坐标
+        """
+        # 获取文本矩形
+        text_rect = painter.fontMetrics().boundingRect(text)
+        text_width = text_rect.width()
+        text_height = text_rect.height()
+        
+        # 图像尺寸
+        img_width = pixmap.width()
+        img_height = pixmap.height()
+        
+        # 根据位置设置坐标
+        if position == "顶部居中":
+            x = (img_width - text_width) // 2
+            y = text_height + 10
+        elif position == "底部居中":
+            x = (img_width - text_width) // 2
+            y = img_height - 10
+        elif position == "左上":
+            x = 10
+            y = text_height + 10
+        elif position == "右上":
+            x = img_width - text_width - 10
+            y = text_height + 10
+        elif position == "左下":
+            x = 10
+            y = img_height - 10
+        elif position == "右下":
+            x = img_width - text_width - 10
+            y = img_height - 10
+        elif position == "居中":
+            x = (img_width - text_width) // 2
+            y = (img_height + text_height) // 2
+        else:
+            # 默认底部居中
+            x = (img_width - text_width) // 2
+            y = img_height - 10
+            
+        return x, y
+            
+    def show_preview_image(self, pixmap):
+        """在预览标签中显示图像
+        
+        Args:
+            pixmap: 预览图像
+        """
+        if pixmap:
+            # 调整图像大小以适应预览区域
+            preview_size = self.preview_label.size()
+            scaled_pixmap = pixmap.scaled(
+                preview_size, 
+                Qt.KeepAspectRatio, 
+                Qt.SmoothTransformation
+            )
+            
+            # 显示预览图像
+            self.preview_label.setPixmap(scaled_pixmap)
+        else:
+            # 清除预览
+            self.preview_label.clear()
+            self.preview_label.setText("封面预览区域")
+            
+    def get_art_text_settings(self):
+        """获取艺术字设置
+        
+        Returns:
+            dict: 艺术字设置字典
+        """
+        return {
+            "enabled": bool(self.art_text_input.text()),
+            "text": self.art_text_input.text(),
+            "style": self.art_style_combo.currentText(),
+            "font_size": self.font_size_spin.value(),
+            "color": self.text_color_combo.currentText(),
+            "position": self.text_position_combo.currentText()
+        } 

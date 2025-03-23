@@ -11,6 +11,8 @@ import traceback
 import os
 from DrissionPage import ChromiumPage, ChromiumOptions
 import random
+import urllib.parse
+import uuid
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -31,10 +33,21 @@ class ApiClient:
         self.thread_control = thread_control
     
     def log_message(self, message):
-        """记录日志消息"""
-        self.logger.info(message)
+        """记录日志消息
+        
+        Args:
+            message: 日志消息
+        """
+        # 记录到logger
+        logging.getLogger('ApiClient').info(message)
+        
+        # 回调函数（如果有）
         if self.log_callback:
-            self.log_callback(message)
+            try:
+                self.log_callback(message)
+            except Exception as e:
+                # 不阻止程序运行，只记录错误
+                logging.getLogger('ApiClient').warning(f"记录日志时出错: {str(e)}")
     
     def login_account(self):
         """登录账号并获取信息
@@ -114,7 +127,7 @@ class ApiClient:
             self.log_message(f"登录过程出错: {str(e)}")
             traceback.print_exc()
             return None
-    
+                
     def get_life_option_list(self, cookies, appid):
         """
         获取子账号列表
@@ -143,7 +156,7 @@ class ApiClient:
                 'sec-fetch-dest': 'empty',
                 'sec-fetch-mode': 'cors',
                 'sec-fetch-site': 'same-site',
-                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
             }
 
             params = {
@@ -180,11 +193,11 @@ class ApiClient:
 
             self.log_message(f"成功获取 {len(operator_list)} 个子账号")
             return operator_list
-
+            
         except Exception as e:
             self.log_message(f"获取子账号列表时出错: {str(e)}")
             return None
-
+    
     def fetch_sub_accounts(self, cookies, appid):
         """
         获取子账号列表并保存到数据库
@@ -251,12 +264,11 @@ class ApiClient:
         切换到指定账号并返回更新后的cookies
         
         Args:
-            cookies: 账号的cookies
-            appid: 账号的appid
+            cookies: 当前账号的cookies
+            appid: 目标账号的appid
             
         Returns:
             dict: 更新后的cookies，如果失败则返回None
-            bool: 如果只需要切换账号（不需要cookies），则返回是否切换成功
         """
         try:
             self.log_message(f"正在切换到账号 {appid}...")
@@ -281,6 +293,9 @@ class ApiClient:
                 'appId': appid
             }
             
+            # 保存原始cookies用于比较
+            original_cookies = cookies.copy()
+            
             response = requests.post(
                 'https://contentweb.alipay.com/life/lifeSelectSwitch.json',
                 params=params,
@@ -297,16 +312,42 @@ class ApiClient:
                 self.log_message(f"切换账号失败: {data.get('message', '未知错误')}")
                 return None
                 
-            self.log_message(f"成功切换到账号 {appid}")
-            
-            # 更新并返回cookies
+            # 更新cookies
             res_cookie = cookies.copy()
+            
+            # 从响应中更新cookies
             for cookie in response.cookies:
                 res_cookie[cookie.name] = cookie.value
+            
+            # 从JSON响应中更新cookies（如果有）
+            if 'result' in data and isinstance(data['result'], dict):
+                result = data['result']
+                if 'switchCookie' in result and isinstance(result['switchCookie'], dict):
+                    switch_cookie = result['switchCookie']
+                    for key, value in switch_cookie.items():
+                        res_cookie[key] = value
+            
+            # 完整比较cookies变化
+            changed_keys = []
+            for key in set(list(original_cookies.keys()) + list(res_cookie.keys())):
+                if key not in original_cookies:
+                    changed_keys.append(f"{key}(新增)")
+                elif key not in res_cookie:
+                    changed_keys.append(f"{key}(删除)")
+                elif original_cookies[key] != res_cookie[key]:
+                    changed_keys.append(key)
+            
+            if changed_keys:
+                self.log_message(f"cookies变化的字段: {', '.join(changed_keys)}")
+            else:
+                self.log_message("警告: 切换账号后cookies没有变化，这可能表示切换失败")
+            
+            self.log_message(f"成功切换到账号 {appid}")
             return res_cookie
             
         except Exception as e:
             self.log_message(f"切换账号时出错: {str(e)}")
+            traceback.print_exc()
             return None
         
     def query_videos(self, cookies, appid, date=None, page=1, size=20):
@@ -406,7 +447,7 @@ class ApiClient:
         Args:
             cookies: 账号的cookies
             appid: 账号的appid
-            
+        
         Returns:
             dict: 包含画风评估结果的字典，如果失败则返回None
         """
@@ -482,78 +523,39 @@ class ApiClient:
             self.log_message(f"查询账号画风时出错: {str(e)}")
             return None
     
-    def get_mt(self, cookies):
-        """获取上传所需的MT令牌
-        
-        Args:
-            cookies: 账号的cookies
-            
-        Returns:
-            str: MT令牌，失败则返回None
-        """
-        try:
-            self.log_message("正在获取MT令牌...")
-            
-            # 验证cookies
-            if not cookies or 'ctoken' not in cookies:
-                self.log_message("Cookie无效，无法获取MT令牌")
-                return None
-                
-            # 构建请求
-            headers = {
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'zh-CN,zh;q=0.9',
-                'Cache-Control': 'no-cache',
-                'Content-Type': 'application/json',
-                'Origin': 'https://c.alipay.com',
-                'Pragma': 'no-cache',
-                'Referer': 'https://c.alipay.com/',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            
-            # 构建参数
-            params = {
-                'ctoken': cookies.get('ctoken', ''),
-                '_input_charset': 'utf-8',
-            }
-            
-            # 发送请求
-            response = requests.get(
-                'https://contentweb.alipay.com/mtcontent/mt.json',
-                params=params,
-                cookies=cookies,
-                headers=headers
-            )
-            
-            if response.status_code != 200:
-                self.log_message(f"获取MT令牌请求失败: HTTP {response.status_code}")
-                return None
-                
-            data = response.json()
-            if data.get('stat') != 'ok':
-                self.log_message(f"获取MT令牌失败: {data.get('message', '未知错误')}")
-                return None
-                
-            mt_token = data.get('result', {}).get('mt', '')
-            if not mt_token:
-                self.log_message("未返回有效的MT令牌")
-                return None
-                
-            self.log_message("成功获取MT令牌")
-            return mt_token
-            
-        except Exception as e:
-            self.log_message(f"获取MT令牌时出错: {str(e)}")
-            traceback.print_exc()
-            return None
-    
     def get_traid(self):
-        """获取上传交易ID
+        """生成交易ID
         
         Returns:
-            str: 上传交易ID
+            str: 交易ID
         """
-        return f"tr_{int(time.time() * 1000)}_{random.randint(100000, 999999)}"
+        return f"traid_{uuid.uuid4().hex}"
+    
+    def get_mt(self,cookies):
+        headers = {
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9',
+            # 'cookie': 'JSESSIONID=RZ550RyGPQrtw5mQvhYIbEpl3OwPXdauthRZ43GZ00; mobileSendTime=-1; credibleMobileSendTime=-1; ctuMobileSendTime=-1; riskMobileBankSendTime=-1; riskMobileAccoutSendTime=-1; riskMobileCreditSendTime=-1; riskCredibleMobileSendTime=-1; riskOriginalAccountMobileSendTime=-1; session.cookieNameId=ALIPAYJSESSIONID; cna=ova4H2k/PjoBASQOA3pmflO9; receive-cookie-deprecation=1; tfstk=fjASH1YyuuqS85MrCy3VcDAkuYfQLHGw2y_pSeFzJ_CRAMKp24Xe840BhH-vzMkuUKsBDnsRU85FOHtXDUWEreUCJn5RKLSF4M1B-hgqbflwrUfhMcoZ_-l8X61gpze8YoFAz4Yt0RlwrU4Aut_oafrCoxd62MKdetBA8iU8pHBpkjIc-wERJ73jlwjYwuCLejFARaU8pHCKlEIcJb2T5wM5qUgqX06jAmckriNL1PvVebLzLWPeGa6W9ejfFTOfPTsOn39DdQK2JQRlnxyctEJ6ApKnQ-fWJLCR7Uc7G1LJ3B_2T2yC23AXkQXb75WWpw6O9taL9E1lctdC6fEfoKLypQx7RWQkaCWCjtgLt95v_Op9Vy0Mk_QpxOAEj7jJJFAMQ1G4e1LXph9C4dNNfEVLdr6gOZsZlqw3KESn1BlzzPIPeZb53qgb2pXRoZswTqwkKTQcPNujluph.; EXC_ANT_KEY=excashier_20001_FP_SENIOR_HJPGP11505070830582; LoginForm=alipay_login_auth; CLUB_ALIPAY_COM=2088442960985162; iw.userid="K1iSL120ipFvFLCnWp3Rzw=="; ali_apache_tracktmp="uid=2088442960985162"; ALI_PAMIR_SID=U16UPhMbPMFmHACo+5UbbeIqTE2#v7dhBGJlS0WhITjHKU3RJTE2; __TRACERT_COOKIE_bucUserId=2088442960985162; auth_goto_http_type=https; ctoken=R6PCbj3w7TAYSw-o; _CHIPS-ctoken=R6PCbj3w7TAYSw-o; alipay="K1iSL120ipFvFLCnWp3Rz9W5rYlr9VP9dcKwk8Zv/g=="; auth_jwt=e30.eyJleHAiOjE3MzM3NTIyMDcyOTIsInJsIjoiNSwwLDI3LDE5LDI5LDEzLDEwIiwic2N0IjoiY1NQbERpWU5DK3pJRW5ja0V5NE1vK2lGTHhXeHlhSmI1OGYwM2V2IiwidWlkIjoiMjA4ODQ0Mjk2MDk4NTE2MiJ9._DCO3Uk3vQWyIwid3mx_QH_QS2jyx2GF_jnJAvElo-s; _CHIPS-ALIPAYJSESSIONID=RZ550RyGPQrtw5mQvhYIbEpl3OwPXdauthRZ43; zone=GZ00F; ALIPAYJSESSIONID=RZ550RyGPQrtw5mQvhYIbEpl3OwPXdauthRZ43GZ00; rtk=bXk6Oqseuv4JU4DLLXnqJ9ojkfUMBQACD3KTlhIozGT2BQgizes; userId=2088442960985162; JSESSIONID=C3C2EBAE3D29394EBDCF0CD321DACF66; spanner=YAtShxmvaflihRYh57A31ceymNvmR9/NXt2T4qEYgj0=',
+            'origin': 'https://c.alipay.com',
+            'priority': 'u=1, i',
+            'referer': 'https://c.alipay.com/',
+            'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-site',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        }
+
+        params = {
+            'type': 'VIDEO',
+        }
+
+        response = requests.get('https://contentweb.alipay.com/life/queryMasstoken.json', params=params, cookies=cookies,
+                                headers=headers)
+        return json.loads(response.text).get("result").get("massToken")
+    
     
     def upload_4m_video(self, mt, file_path):
         """上传小视频文件（<4MB）
@@ -624,7 +626,7 @@ class ApiClient:
             return None
     
     def upload_large_video(self, mt, file_path, file_size=None):
-        """上传大视频文件（>=4MB），采用分片上传
+        """上传大视频文件，使用分块上传方式
         
         Args:
             mt: MT令牌
@@ -632,188 +634,242 @@ class ApiClient:
             file_size: 文件大小，如果为None则自动获取
             
         Returns:
-            str: 文件ID，失败则返回None
+            tuple: (file_id, file_name) 文件ID和文件名，失败则返回None
         """
         try:
+            # 获取文件大小
             if file_size is None:
                 file_size = os.path.getsize(file_path)
             
             file_name = os.path.basename(file_path)
-            self.log_message(f"开始分片上传大视频: {file_name} ({file_size} 字节)")
+            self.log_message(f"开始上传视频: {file_name} ({file_size} 字节)")
             
-            # 获取交易ID
-            traid = self.get_traid()
-            
-            # 构建请求头
-            headers = {
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'zh-CN,zh;q=0.9',
-                'Origin': 'https://c.alipay.com',
-                'Referer': 'https://c.alipay.com/',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Content-Type': 'application/json'
-            }
-            
-            # 初始化分片上传
-            init_data = {
-                'uploadType': 'video',
-                'fileType': '4',
-                'fileName': file_name,
-                'fileSize': file_size,
-                'mt': mt,
-                'tradeId': traid
-            }
-            
-            init_response = requests.post(
-                'https://contentweb.alipay.com/mtcontent/initMultipartUpload.json',
-                json=init_data,
-                headers=headers
-            )
-            
-            if init_response.status_code != 200:
-                self.log_message(f"初始化分片上传请求失败: HTTP {init_response.status_code}")
-                return None
-                
-            init_data = init_response.json()
-            if init_data.get('stat') != 'ok':
-                self.log_message(f"初始化分片上传失败: {init_data.get('message', '未知错误')}")
-                return None
-                
-            file_id = init_data.get('result', {}).get('fileId', '')
-            if not file_id:
-                self.log_message("未返回有效的文件ID")
-                return None
-                
             # 打开文件
-            with open(file_path, 'rb') as f:
-                # 分片上传，每片 4M
-                chunk_size = 4 * 1024 * 1024
-                part_number = 1
+            with open(file_path, 'rb') as file:
+                # 构建文件数据
+                files = {
+                    'file': (file.name, file, 'video/mp4')  # 'file' 是表单字段名，file.name 是文件名，'video/mp4' 是文件的 MIME 类型
+                }
                 
-                while True:
-                    if self.thread_control and self.thread_control.should_stop():
-                        self.log_message("用户取消上传")
+                # 计算文件MD5
+                file_md5 = self._calculate_file_md5(file)
+                
+                # 获取交易ID
+                traid = self.get_traid()
+                
+                # 构建请求头
+                headers = {
+                    'accept': 'application/json, text/plain, */*',
+                    'accept-language': 'zh-CN,zh;q=0.9',
+                    'origin': 'https://c.alipay.com',
+                    'priority': 'u=1, i',
+                    'referer': 'https://c.alipay.com/',
+                    'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                    'sec-ch-ua-mobile': '?0',
+                    'sec-ch-ua-platform': '"Windows"',
+                    'sec-fetch-dest': 'empty',
+                    'sec-fetch-mode': 'cors',
+                    'sec-fetch-site': 'same-site',
+                    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    'x-mass-appkey': 'apwallet',
+                    'x-mass-biztype': 'content_lifetab',
+                    'x-mass-cust-conf': '{"extern":{"isWaterMark":true}}',
+                    'x-mass-file-length': str(file_size),
+                    'x-mass-file-md5': file_md5,
+                    'x-mass-file-multipart-slice-size': '4194304',
+                    'x-mass-filename': urllib.parse.quote(file.name),
+                    'x-mass-public': 'false',
+                    'x-mass-token': mt,
+                    'x-mass-traceid': traid,
+                }
+                
+                # 初始化上传
+                self.log_message("初始化上传请求")
+                response = requests.post('https://mass.alipay.com/file/multipart/upload/claim', headers=headers)
+                
+                # 检查响应状态
+                if response.status_code != 200:
+                    self.log_message(f"初始化上传失败: HTTP {response.status_code}")
+                    return None
+                
+                # 解析响应
+                try:
+                    data = json.loads(response.text)
+                    if not data.get('success', False):
+                        error_msg = data.get('errorMsg', '未知错误')
+                        self.log_message(f"初始化上传失败: {error_msg}")
                         return None
-                        
-                    # 读取块数据
-                    chunk_data = f.read(chunk_size)
-                    if not chunk_data:
+                    
+                    file_id = data.get('data', {}).get('fileId')
+                    if not file_id:
+                        self.log_message("未获取到文件ID")
+                        return None
+                    
+                    self.log_message(f"成功获取文件ID: {file_id}")
+                except Exception as e:
+                    self.log_message(f"解析响应数据失败: {str(e)}")
+                    traceback.print_exc()
+                    return None
+            
+            # 定义上传分块函数
+            def upload_part(args):
+                """上传单个分块的函数"""
+                try:
+                    part_num, part_data, start_pos = args
+                    part_headers = {
+                        'accept': 'application/json, text/plain, */*',
+                        'accept-language': 'zh-CN,zh;q=0.9',
+                        'origin': 'https://c.alipay.com',
+                        'referer': 'https://c.alipay.com/',
+                        'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                        'sec-ch-ua-mobile': '?0',
+                        'sec-ch-ua-platform': '"Windows"',
+                        'sec-fetch-dest': 'empty',
+                        'sec-fetch-mode': 'cors',
+                        'sec-fetch-site': 'same-site',
+                        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                        'x-mass-appkey': 'apwallet',
+                        'x-mass-biztype': 'content_lifetab',
+                        'x-mass-file-multipart-id': file_id,
+                        'x-mass-file-multipart-length': str(len(part_data)),
+                        'x-mass-file-multipart-num': str(part_num),
+                        'x-mass-file-multipart-start': str(start_pos),
+                        'x-mass-token': mt,
+                        'x-mass-traceid': self.get_traid()
+                    }
+                    
+                    part_files = {
+                        'file': ('blob', part_data, 'application/octet-stream'),
+                    }
+                    
+                    part_response = requests.post(
+                        'https://mass.alipay.com/file/multipart/upload/part', 
+                        headers=part_headers, 
+                        files=part_files,
+                        timeout=(30, 120)
+                    )
+                    
+                    self.log_message(f"分块 {part_num} 上传完成，大小: {len(part_data)}")
+                    return part_response.json()
+                except Exception as e:
+                    self.log_message(f"分块 {part_num} 上传失败: {str(e)}")
+                    raise
+            
+            # 开始分块上传
+            with open(file_path, 'rb') as file:
+                # 设置分块大小
+                max_size = 4 * 1024 * 1024  # 4MB
+                # 计算分块数量
+                num_parts = (file_size // max_size) + (1 if file_size % max_size else 0)
+                
+                # 准备所有分块数据
+                upload_args = []
+                for i in range(num_parts):
+                    part_data = file.read(max_size)
+                    if not part_data:
                         break
-                        
-                    # 设置分片参数
-                    part_data = {
-                        'mt': mt,
-                        'fileId': file_id,
-                        'partNumber': part_number,
-                        'partSize': len(chunk_data),
-                        'tradeId': traid
-                    }
+                    upload_args.append((i + 1, part_data, i * max_size))
+                
+                # 使用线程池并行上传分块
+                import concurrent.futures
+                from concurrent.futures import ThreadPoolExecutor
+                
+                max_workers = min(5, num_parts)  # 最多5个线程
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = []
+                    for args in upload_args:
+                        future = executor.submit(upload_part, args)
+                        futures.append(future)
                     
-                    # 获取上传URL
-                    part_url_resp = requests.post(
-                        'https://contentweb.alipay.com/mtcontent/getMultipartUrl.json',
-                        json=part_data,
-                        headers=headers
-                    )
-                    
-                    if part_url_resp.status_code != 200:
-                        self.log_message(f"获取分片上传URL失败: HTTP {part_url_resp.status_code}")
-                        return None
-                        
-                    part_url_data = part_url_resp.json()
-                    if part_url_data.get('stat') != 'ok':
-                        self.log_message(f"获取分片上传URL失败: {part_url_data.get('message', '未知错误')}")
-                        return None
-                        
-                    upload_url = part_url_data.get('result', {}).get('url', '')
-                    if not upload_url:
-                        self.log_message("未返回有效的分片上传URL")
-                        return None
-                    
-                    # 上传分片
-                    upload_headers = {
-                        'Content-Type': 'application/octet-stream',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    }
-                    
-                    upload_resp = requests.put(
-                        upload_url,
-                        data=chunk_data,
-                        headers=upload_headers
-                    )
-                    
-                    if upload_resp.status_code not in [200, 201, 204]:
-                        self.log_message(f"上传分片失败: HTTP {upload_resp.status_code}")
-                        return None
-                    
-                    # 显示上传进度
-                    progress = min(100, int(part_number * chunk_size * 100 / file_size))
-                    self.log_message(f"上传进度: {progress}% (分片 {part_number})")
-                    
-                    # 下一个分片
-                    part_number += 1
+                    # 等待所有分块上传完成
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            future.result()  # 检查是否有异常
+                        except Exception as e:
+                            self.log_message(f"分块上传失败: {str(e)}")
+                            raise
             
             # 完成上传
-            return self.upload_complete(mt, file_id, traid)
+            self._upload_complete(mt, file_id)
+            
+            return file_id, file_name
             
         except Exception as e:
-            self.log_message(f"上传大视频时出错: {str(e)}")
+            self.log_message(f"上传视频时出错: {str(e)}")
             traceback.print_exc()
             return None
     
-    def upload_complete(self, mt, file_id, traid):
-        """完成分片上传
+    def _upload_complete(self, mt, file_id):
+        """完成分块上传
         
         Args:
             mt: MT令牌
             file_id: 文件ID
-            traid: 交易ID
-            
-        Returns:
-            str: 文件ID，失败则返回None
         """
         try:
             self.log_message(f"完成文件上传: {file_id}")
             
             # 构建请求头
             headers = {
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'zh-CN,zh;q=0.9',
-                'Origin': 'https://c.alipay.com',
-                'Referer': 'https://c.alipay.com/',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Content-Type': 'application/json'
+                'accept': 'application/json, text/plain, */*',
+                'accept-language': 'zh-CN,zh;q=0.9',
+                'origin': 'https://c.alipay.com',
+                'priority': 'u=1, i',
+                'referer': 'https://c.alipay.com/',
+                'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-site',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'x-mass-appkey': 'apwallet',
+                'x-mass-biztype': 'content_lifetab',
+                'x-mass-file-multipart-id': file_id,
+                'x-mass-token': mt
             }
             
-            # 完成上传
-            complete_data = {
-                'mt': mt,
-                'fileId': file_id,
-                'tradeId': traid
-            }
+            # 发送完成请求
+            response = requests.post('https://mass.alipay.com/file/multipart/upload/complete', headers=headers)
             
-            response = requests.post(
-                'https://contentweb.alipay.com/mtcontent/completeMultipartUpload.json',
-                json=complete_data,
-                headers=headers
-            )
-            
-            if response.status_code != 200:
-                self.log_message(f"完成上传请求失败: HTTP {response.status_code}")
-                return None
-                
-            data = response.json()
-            if data.get('stat') != 'ok':
-                self.log_message(f"完成上传失败: {data.get('message', '未知错误')}")
-                return None
-                
-            self.log_message("分片上传完成")
-            return file_id
+            # 记录响应
+            self.log_message(f"完成上传响应: {response.json()}")
             
         except Exception as e:
             self.log_message(f"完成上传时出错: {str(e)}")
             traceback.print_exc()
-            return None
+    
+    def _calculate_file_md5(self, file):
+        """计算文件MD5
+        
+        Args:
+            file: 文件对象
+            
+        Returns:
+            str: 文件MD5哈希值
+        """
+        # 保存当前文件位置
+        current_position = file.tell()
+        
+        # 重置文件指针到开始
+        file.seek(0)
+        
+        # 创建MD5对象
+        import hashlib
+        md5_hash = hashlib.md5()
+        
+        # 分块读取文件并更新MD5
+        chunk_size = 8192
+        chunk = file.read(chunk_size)
+        while chunk:
+            md5_hash.update(chunk)
+            chunk = file.read(chunk_size)
+        
+        # 恢复文件指针位置
+        file.seek(current_position)
+        
+        # 返回MD5哈希值
+        return md5_hash.hexdigest()
     
     def upload_pic(self, cookies, video_file_path=None):
         """上传视频封面图片
@@ -839,145 +895,130 @@ class ApiClient:
                 self.log_message(f"封面图片不存在: {image_path}")
                 return None
                 
-            # 获取MT令牌
-            mt = self.get_mt(cookies)
-            if not mt:
-                self.log_message("获取MT令牌失败，无法上传封面")
-                return None
-                
             # 构建请求头
             headers = {
-                'Accept': '*/*',
-                'Accept-Language': 'zh-CN,zh;q=0.9',
-                'Origin': 'https://c.alipay.com',
-                'Referer': 'https://c.alipay.com/',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'accept': 'application/json',
+                'accept-language': 'zh-CN,zh;q=0.9,en-GB;q=0.8,en;q=0.7,en-US;q=0.6',
+                'cache-control': 'no-cache',
+                'origin': 'https://c.alipay.com',
+                'pragma': 'no-cache',
+                'priority': 'u=1, i',
+                'referer': 'https://c.alipay.com/',
+                'sec-ch-ua': '"Microsoft Edge";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-site',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
             }
             
-            # 准备表单数据
-            form_data = {
-                'fileType': '3',  # 图片文件类型
-                'mt': mt,
-                'rmsToken': ''
-            }
-            
-            # 准备文件
-            files = {
-                'file': (os.path.basename(image_path), open(image_path, 'rb'), 'image/jpeg')
-            }
-            
-            # 发送请求
-            response = requests.post(
-                'https://contentweb.alipay.com/mtcontent/uploadFile.json',
-                data=form_data,
-                files=files,
-                headers=headers
-            )
-            
-            # 关闭文件
-            files['file'][1].close()
-            
-            if response.status_code != 200:
-                self.log_message(f"上传封面请求失败: HTTP {response.status_code}")
-                return None
+            # 打开对应的图片文件
+            with open(image_path, 'rb') as file:
+                files = {
+                    'Filedata': (file.name, file, 'application/octet-stream'),
+                }
+
+                response = requests.post('https://contentweb.alipay.com/life/uploadPicAjax.json',
+                cookies=cookies,
+                headers=headers,
+                                        files=files)
+                return json.loads(response.text).get('extProperty')
                 
-            data = response.json()
-            if data.get('stat') != 'ok':
-                self.log_message(f"上传封面失败: {data.get('message', '未知错误')}")
-                return None
-                
-            pic_url = data.get('result', {}).get('url', '')
-            if not pic_url:
-                self.log_message("未返回有效的封面URL")
-                return None
-                
-            self.log_message(f"封面上传成功: {pic_url}")
-            return pic_url
-            
         except Exception as e:
             self.log_message(f"上传封面时出错: {str(e)}")
             traceback.print_exc()
             return None
     
-    def get_video_url(self, file_id, mt, max_retries=12, retry_interval=10):
-        """获取处理完成的视频URL
+    def get_video_url(self, file_id=None, mt=None, max_retries=12, retry_interval=10, cookies=None, appid=None):
+        """获取视频URL，10分钟内每10秒重试一次
         
         Args:
-            file_id: 文件ID
-            mt: MT令牌
-            max_retries: 最大重试次数
-            retry_interval: 重试间隔（秒）
+            file_id: 文件ID，如果为None则从cookies获取
+            mt: MT令牌，如果为None则从cookies获取
+            max_retries: 最大重试次数，默认12次
+            retry_interval: 重试间隔，单位秒，默认10秒
+            cookies: cookies对象，用于从中获取file_id和mt
+            appid: 应用ID，默认不需要
             
         Returns:
-            str: 视频URL，失败则返回None
+            str: 视频URL或None（如果获取失败）
+            
+        Raises:
+            Exception: 超过重试次数仍未获取到视频URL时抛出异常
         """
         try:
-            self.log_message(f"等待视频处理完成，文件ID: {file_id}")
+            # 如果没有提供file_id和mt，尝试从cookies中获取
+            if (file_id is None or mt is None) and cookies is None:
+                self.log_message("错误：未提供file_id和mt，且没有提供cookies以获取这些值")
+                return None
+            
+            # 如果mt为None且cookies不为None，尝试从cookies中获取mt
+            if mt is None and cookies is not None:
+                mt = self.get_mt(cookies)
+                if mt is None:
+                    self.log_message("从cookies中获取MT令牌失败")
+                    return None
+            
+            # 如果file_id仍然为None
+            if file_id is None:
+                self.log_message("错误：未提供file_id，无法获取视频URL")
+                return None
             
             # 构建请求头
             headers = {
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'zh-CN,zh;q=0.9',
-                'Origin': 'https://c.alipay.com',
-                'Referer': 'https://c.alipay.com/',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Content-Type': 'application/json'
+                'accept': 'application/json, text/plain, */*',
+                'accept-language': 'zh-CN,zh;q=0.9',
+                'origin': 'https://c.alipay.com',
+                'priority': 'u=1, i',
+                'referer': 'https://c.alipay.com/',
+                'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-site',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
             }
             
-            # 准备请求数据
-            request_data = {
-                'mt': mt,
-                'fileId': file_id
-            }
-            
-            # 循环查询视频处理状态
-            for retry in range(max_retries):
-                if self.thread_control and self.thread_control.should_stop():
-                    self.log_message("用户取消获取视频URL")
-                    return None
-                    
-                # 发送请求
-                response = requests.post(
-                    'https://contentweb.alipay.com/mtcontent/getUrl.json',
-                    json=request_data,
-                    headers=headers
-                )
-                
-                if response.status_code != 200:
-                    self.log_message(f"获取视频URL请求失败: HTTP {response.status_code}")
-                    time.sleep(retry_interval)
-                    continue
-                    
+            # 开始尝试获取视频URL
+            for attempt in range(max_retries):
                 try:
-                    data = response.json()
-                except Exception as e:
-                    self.log_message(f"解析响应失败: {str(e)}")
-                    time.sleep(retry_interval)
-                    continue
+                    # 发送请求
+                    url = f'https://mmtcapi.alipay.com/video/2.0/convert/query?fileId={file_id}&mt={mt}&bizKey=content_lifetab'
+                    self.log_message(f"正在获取视频URL，尝试 {attempt + 1}/{max_retries}: {url}")
                     
-                if data.get('stat') != 'ok':
-                    error_msg = data.get('message', '未知错误')
-                    if "处理中" in error_msg or "尚未处理完成" in error_msg:
-                        self.log_message(f"视频处理中 ({retry+1}/{max_retries})，等待 {retry_interval} 秒...")
+                    response = requests.get(url, headers=headers)
+                    
+                    # 解析响应
+                    try:
+                        data = json.loads(response.text).get('data', {})
+                        trans_code = data.get('transCode', {})
+                        convert_results = trans_code.get('convertResults', [])
+                        
+                        if convert_results and convert_results[0].get('url'):
+                            video_url = convert_results[0].get('url')
+                            self.log_message(f"成功获取视频URL: {video_url}")
+                            return video_url
+                        
+                        self.log_message(f"未获取到视频URL，将在{retry_interval}秒后重试。响应: {response.text}")
                         time.sleep(retry_interval)
-                        continue
-                    else:
-                        self.log_message(f"获取视频URL失败: {error_msg}")
-                        return None
-                
-                # 获取视频URL
-                video_url = data.get('result', {}).get('url', '')
-                if not video_url:
-                    self.log_message(f"未返回有效的视频URL ({retry+1}/{max_retries})，等待 {retry_interval} 秒...")
-                    time.sleep(retry_interval)
-                    continue
                     
-                self.log_message(f"成功获取视频URL: {video_url}")
-                return video_url
+                    except Exception as e:
+                        self.log_message(f"解析响应数据失败: {str(e)}")
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_interval)
                 
-            self.log_message(f"获取视频URL超时，已重试 {max_retries} 次")
-            return None
+                except Exception as e:
+                    self.log_message(f'获取视频URL失败: {str(e)}')
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_interval)
+                    else:
+                        raise Exception(f"获取视频URL失败，已超过10分钟重试时间")
             
+            # 如果所有尝试都失败
+            raise Exception(f"获取视频URL失败，已超过10分钟重试时间")
+        
         except Exception as e:
             self.log_message(f"获取视频URL时出错: {str(e)}")
             traceback.print_exc()
@@ -991,7 +1032,7 @@ class ApiClient:
             videoId: 视频ID
             videoFile: 视频文件路径
             videoFileName: 视频文件名
-            extProperty: 额外属性
+            extProperty: 额外属性（包含封面图片信息）
             mt: MT令牌
             scheduleTime: 定时发布时间
             title: 视频标题
@@ -999,103 +1040,214 @@ class ApiClient:
             topics: 话题标签列表
             
         Returns:
-            str: 内容ID，失败则返回None
+            dict: 发布响应数据，失败则抛出异常
         """
         try:
             self.log_message(f"准备发布视频: {title}")
-            
-            # 上传封面
-            cover_url = self.upload_pic(cookies, videoFile)
-            if not cover_url:
-                self.log_message("上传封面失败，使用视频默认封面")
-                
-            # 获取视频URL
-            video_url = self.get_video_url(videoId, mt)
-            if not video_url:
-                self.log_message("获取视频URL失败")
-                return None
-                
-            # 处理话题标签
-            topic_list = []
-            if topics and isinstance(topics, list):
-                for topic in topics:
-                    if topic and isinstance(topic, str):
-                        topic_list.append({"topicId": "", "topicName": topic})
+            self.log_message(f"传入的话题原始数据: {topics}")
             
             # 构建请求头
             headers = {
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'zh-CN,zh;q=0.9',
-                'Origin': 'https://c.alipay.com',
-                'Referer': 'https://c.alipay.com/',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Content-Type': 'application/json'
+                'accept': 'application/json, text/plain, */*',
+                'accept-language': 'zh-CN,zh;q=0.9',
+                'content-type': 'application/json',
+                'origin': 'https://c.alipay.com',
+                'priority': 'u=1, i',
+                'referer': 'https://c.alipay.com/',
+                'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"Windows"',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-site',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            }
+            
+            # 准备请求参数
+            params = {
+                'loginPublicId': loginPublicId,
             }
             
             # 准备请求数据
-            content_data = {
-                "contentTitle": title,
-                "contentDesc": "",
-                "contentType": "VIDEO",
-                "videoUrl": video_url,
-                "topicList": topic_list
+            json_data = {
+                'loginPublicId': loginPublicId,
+                'sourceId': 'sweb',
+                'videoId': videoId,
+                'videoDjangoId': videoId,
+                'massToken': mt,
+                'videoFile': videoFile,
+                'videoFileName': videoFileName,
+                'title': os.path.splitext(os.path.basename(videoFileName))[0],
+                'text': title,
+                'canSmartCover': True,
+                'canReply': True,
+                'canSelectReply': False,
+                'canDownload': False,
+                'contentType': 2,
+                'imageList': [
+                    {
+                        'djangoId': extProperty.get('djangoId'),
+                        'imageUrl': extProperty.get('filePath'),
+                        'width': extProperty.get('width'),
+                        'height': extProperty.get('height'),
+                        'type': 'cover_static',
+                        'index': 0,
+                    },
+                    {
+                        'djangoId': extProperty.get('djangoId'),
+                        'imageUrl': extProperty.get('filePath'),
+                        'width': extProperty.get('width'),
+                        'height': extProperty.get('height'),
+                        'type': 'cover_vertical_static',
+                        'index': 1,
+                    },
+                    {
+                        'djangoId': extProperty.get('djangoId'),
+                        'imageUrl': extProperty.get('filePath'),
+                        'width': extProperty.get('width'),
+                        'height': extProperty.get('height'),
+                        'type': 'message_cover',
+                        'index': 2,
+                    },
+                ],
+                'offerInfoList': [],
+                'topicInfoVOList': [],
+                'extInfo': {
+                    'coverSource': 'custom_settings',
+                },
             }
             
-            # 如果有封面，添加封面URL
-            if cover_url:
-                content_data["coverImageUrl"] = cover_url
+            # 处理话题信息 - 两种方式:
+            # 1. 如果传入了topics参数，直接使用
+            if topics and isinstance(topics, dict) and 'topicInfoVOList' in topics:
+                json_data['topicInfoVOList'] = topics['topicInfoVOList']
+                self.log_message(f"使用API话题信息: {topics['topicInfoVOList']}")
+            # 2. 传入了列表形式的话题
+            elif topics and isinstance(topics, list):
+                topic_list = []
+                for topic in topics:
+                    if isinstance(topic, dict):
+                        # 如果是字典形式，检查是否已格式化
+                        if 'topicName' in topic:
+                            topic_list.append(topic)
+                        elif 'name' in topic:
+                            topic_list.append({
+                                "topicName": f"#{topic['name']}#",
+                                "topicId": topic.get('id', ''),
+                                "topicType": "NORMAL"
+                            })
+                    elif isinstance(topic, str):
+                        # 字符串形式，确保有#符号
+                        topic = topic.strip()
+                        if not topic.startswith('#'):
+                            topic = '#' + topic
+                        if not topic.endswith('#'):
+                            topic = topic + '#'
+                        topic_list.append({
+                            "topicName": topic,
+                            "topicId": "",
+                            "topicType": "NORMAL"
+                        })
                 
-            # 如果有定时发布时间，添加发布时间
+                if topic_list:
+                    self.log_message(f"从列表转换的话题: {topic_list}")
+                    json_data['topicInfoVOList'] = topic_list
+            # 3. 从标题中提取话题
+            elif title and "#" in title:
+                # 提取所有带 # 的话题
+                topic_list = []
+                parts = title.split("#")
+                # 跳过第一个部分（如果以#开头，第一个元素是空的）
+                for i in range(1, len(parts)):
+                    if parts[i].strip():
+                        # 获取话题内容（去除可能的结尾#）
+                        topic_text = parts[i].strip().split("#")[0].strip()
+                        if topic_text:
+                            topic_list.append({
+                                "topicName": f"#{topic_text}#",
+                                "topicId": "",
+                                "topicType": "NORMAL"
+                            })
+                
+                if topic_list:
+                    self.log_message(f"从标题提取话题: {topic_list}")
+                    json_data['topicInfoVOList'] = topic_list
+            
+            # 只有当 scheduleTime 有值时才添加到 json_data
             if scheduleTime:
-                content_data["publishTime"] = scheduleTime
+                json_data['scheduleTime'] = self.format_time_string(scheduleTime)
             
-            request_data = {
-                "content": content_data,
-                "loginPublicId": loginPublicId,
-                "sourceId": "lifestream"
-            }
-            
-            # 参数
-            params = {
-                'ctoken': cookies.get('ctoken', '')
-            }
+            # 打印最终的话题信息和完整的json数据
+            self.log_message(f"最终话题信息: {json_data['topicInfoVOList']}")
+            self.log_message(f"发布请求完整数据: {json.dumps(json_data, ensure_ascii=False, indent=2)}")
             
             # 发送请求
             response = requests.post(
-                'https://contentweb.alipay.com/life/publishContentV2.json',
+                'https://contentweb.alipay.com/life/publishShortVideo.json',
                 params=params,
-                json=request_data,
                 cookies=cookies,
-                headers=headers
+                headers=headers,
+                json=json_data,
             )
             
-            if response.status_code != 200:
-                self.log_message(f"发布视频请求失败: HTTP {response.status_code}")
-                return None
-                
-            data = response.json()
-            if data.get('stat') != 'ok':
-                self.log_message(f"发布视频失败: {data.get('message', '未知错误')}")
-                return None
-                
-            # 获取内容ID
-            content_id = data.get('result', {}).get('contentId', '')
-            if not content_id:
-                self.log_message("未返回有效的内容ID")
-                return None
-                
-            if scheduleTime:
-                self.log_message(f"视频已定时发布: {title} (ID: {content_id}, 时间: {scheduleTime})")
-            else:
-                self.log_message(f"视频已成功发布: {title} (ID: {content_id})")
-                
-            return content_id
+            # 解析响应数据
+            response_data = json.loads(response.text)
+            self.log_message(f'发布响应: {response.text}')
+            
+            # 检查发布状态
+            if response_data.get('stat') == 'failed':
+                error_message = response_data.get('errorMessage', '未知错误')
+                error_code = response_data.get('errorCode', 'unknown')
+                self.log_message(f'发布失败 - 错误码: {error_code}, 错误信息: {error_message}')
+                raise Exception(f'发布失败: {error_message}')
+            
+            return response_data
             
         except Exception as e:
             self.log_message(f"发布视频时出错: {str(e)}")
             traceback.print_exc()
-            return None
+            raise  # 重新抛出异常，与zfb.py保持一致
             
+    def format_time_string(self, time_str):
+        """格式化时间字符串为API需要的格式
+        
+        Args:
+            time_str: 时间字符串
+            
+        Returns:
+            str: 格式化后的时间字符串
+        """
+        try:
+            # 如果是datetime对象，直接格式化
+            if isinstance(time_str, datetime.datetime):
+                return time_str.strftime('%Y-%m-%d %H:%M:%S')
+                
+            # 如果是字符串，先解析再格式化
+            if isinstance(time_str, str):
+                # 尝试不同的格式解析
+                formats = [
+                    '%Y-%m-%d %H:%M:%S',
+                    '%Y/%m/%d %H:%M:%S',
+                    '%Y年%m月%d日 %H:%M:%S',
+                    '%Y-%m-%d %H:%M',
+                    '%Y/%m/%d %H:%M',
+                    '%Y年%m月%d日 %H:%M'
+                ]
+                
+                for fmt in formats:
+                    try:
+                        dt = datetime.datetime.strptime(time_str, fmt)
+                        return dt.strftime('%Y-%m-%d %H:%M:%S')
+                    except ValueError:
+                        continue
+                        
+            # 如果解析失败，返回原始字符串
+            return time_str
+            
+        except Exception as e:
+            self.log_message(f"格式化时间字符串出错: {str(e)}")
+            return time_str
+    
     def search_topics(self, cookies, appid, keywords):
         """搜索话题
         
@@ -1110,17 +1262,14 @@ class ApiClient:
             list: 话题列表，每个话题包含name和topicId，失败则返回None
         """
         try:
-            if not keywords or not cookies or not appid:
-                self.log_message("搜索话题参数不完整")
-                return None
-                
-            self.log_message(f"正在搜索话题: {keywords}")
+            import requests  # 确保导入requests库
             
-            # 验证cookies
-            if not cookies or 'ctoken' not in cookies:
-                self.log_message("Cookie无效，无法搜索话题")
+            if not keywords or not appid:
+                self.log_message("搜索话题缺少必要参数")
                 return None
-                
+            
+            self.log_message(f"开始搜索话题: {keywords}")
+            
             # 构建请求头
             headers = {
                 'Accept': 'application/json, text/plain, */*',
@@ -1154,38 +1303,41 @@ class ApiClient:
                 cookies=cookies,
                 headers=headers,
                 json=json_data,
+                timeout=15
             )
             
-            if response.status_code != 200:
+            self.log_message(f"搜索话题响应状态码: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("stat") == "ok":
+                    # 获取话题列表
+                    topics = data.get("result", [])
+                    if not topics:
+                        self.log_message("未找到相关话题")
+                        return []
+                        
+                    # 格式化话题列表
+                    formatted_topics = []
+                    for topic in topics:
+                        topic_name = topic.get("name", "")
+                        topic_id = topic.get("topicId", "")
+                        if topic_name:
+                            formatted_topics.append({
+                                'name': topic_name,
+                                'topicId': topic_id,
+                                'display': f"#{topic_name}#"  # 添加#前缀和后缀
+                            })
+                    
+                    self.log_message(f"成功找到 {len(formatted_topics)} 个话题")
+                    return formatted_topics
+                else:
+                    error_msg = data.get("errorMessage", "未知错误")
+                    self.log_message(f"搜索话题失败: {error_msg}")
+                    return None
+            else:
                 self.log_message(f"搜索话题请求失败: HTTP {response.status_code}")
                 return None
-                
-            data = response.json()
-            if data.get("stat") != "ok":
-                error_msg = data.get("errorMessage", "未知错误")
-                self.log_message(f"搜索话题失败: {error_msg}")
-                return None
-                
-            # 获取话题列表
-            topics = data.get("result", [])
-            if not topics:
-                self.log_message("未找到相关话题")
-                return []
-                
-            # 格式化话题列表
-            formatted_topics = []
-            for topic in topics:
-                topic_name = topic.get("name", "")
-                topic_id = topic.get("topicId", "")
-                if topic_name:
-                    formatted_topics.append({
-                        'name': topic_name,
-                        'topicId': topic_id,
-                        'display': f"#{topic_name}#"  # 添加#前缀和后缀
-                    })
-            
-            self.log_message(f"成功找到 {len(formatted_topics)} 个话题")
-            return formatted_topics
             
         except Exception as e:
             self.log_message(f"搜索话题时出错: {str(e)}")
@@ -1199,35 +1351,69 @@ class ApiClient:
             topics: 话题列表，可以是字符串列表或者包含name和topicId的字典列表
             
         Returns:
-            list: 格式化后的话题列表，适用于发布接口
+            dict: 格式化后的话题对象，适用于发布接口
         """
         try:
+            self.log_message(f"格式化话题输入: {topics}")
+            
             if not topics:
-                return []
-                
-            formatted_topics = []
+                return {"topicInfoVOList": []}
+            
+            # 如果已经是完整的topicInfoVOList格式，直接返回
+            if isinstance(topics, dict) and 'topicInfoVOList' in topics:
+                self.log_message(f"使用已有话题信息: {topics}")
+                return topics
+            
+            topic_list = []
             
             for topic in topics:
                 if isinstance(topic, str):
-                    # 移除前后的#号
-                    topic_name = topic.strip('#')
-                    formatted_topics.append({
-                        "topicId": "",
-                        "topicName": topic_name
+                    # 确保有#前缀和后缀
+                    topic = topic.strip()
+                    if not topic.startswith('#'):
+                        topic = '#' + topic
+                    if not topic.endswith('#'):
+                        topic = topic + '#'
+                    
+                    topic_list.append({
+                        "topicName": topic,
+                        "topicId": "",  # 没有ID信息
+                        "topicType": "NORMAL"
                     })
+                    
                 elif isinstance(topic, dict):
-                    # 已经是字典格式，提取name和topicId
-                    topic_name = topic.get('name', '')
-                    topic_id = topic.get('topicId', '')
-                    if topic_name:
-                        formatted_topics.append({
+                    # 已经是字典格式，根据字段决定处理方式
+                    if 'topicName' in topic and 'topicId' in topic:
+                        # 已经是API需要的格式，包含topicId
+                        topic_list.append(topic)
+                        
+                    elif 'display' in topic or 'name' in topic:
+                        # 获取话题名称
+                        topic_name = topic.get('display', '') or topic.get('name', '')
+                        if not topic_name:
+                            continue
+                            
+                        # 确保有#前缀和后缀
+                        topic_name = topic_name.strip()
+                        if not topic_name.startswith('#'):
+                            topic_name = '#' + topic_name
+                        if not topic_name.endswith('#'):
+                            topic_name = topic_name + '#'
+                        
+                        # 获取话题ID，优先使用topicId字段，其次使用id字段
+                        topic_id = topic.get('topicId', '') or topic.get('id', '')
+                        
+                        topic_list.append({
+                            "topicName": topic_name,
                             "topicId": topic_id,
-                            "topicName": topic_name
+                            "topicType": "NORMAL"
                         })
             
+            formatted_topics = {"topicInfoVOList": topic_list}
+            self.log_message(f"格式化话题输出: {formatted_topics}")
             return formatted_topics
             
         except Exception as e:
             self.log_message(f"格式化话题时出错: {str(e)}")
             traceback.print_exc()
-            return []
+            return {"topicInfoVOList": []}

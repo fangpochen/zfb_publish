@@ -270,6 +270,10 @@ class RecommendAnalysis(QMainWindow):
                     lambda: self.account_manager.clear_account_data(clear_all=True) if hasattr(self.account_manager, 'clear_account_data') else None
                 )
             
+            # 同步所有账号cookies按钮
+            if hasattr(self.ui, 'syncAllAccountsCookiesButton'):
+                self.ui.syncAllAccountsCookiesButton.clicked.connect(self.sync_all_accounts_cookies)
+            
         except Exception as e:
             print(f"连接信号时出错: {str(e)}")
             traceback.print_exc()
@@ -337,6 +341,32 @@ class RecommendAnalysis(QMainWindow):
             print(f"窗口关闭事件处理时出错: {str(e)}")
             traceback.print_exc()
             event.accept()  # 确保能够关闭
+
+    def sync_all_accounts_cookies(self):
+        """同步所有账号的cookies"""
+        try:
+            # 确保账号管理器已初始化
+            if not hasattr(self, 'account_manager'):
+                print("账号管理器未初始化")
+                return
+            
+            # 获取最新登录的账号ID
+            source_appid = None
+            if hasattr(self, 'login_appid') and self.login_appid:
+                source_appid = self.login_appid
+            
+            # 调用账号管理器的方法同步cookies
+            success_count, total_count = self.account_manager.sync_all_accounts_cookies(source_appid)
+            
+            # 显示结果消息
+            if success_count > 0:
+                QMessageBox.information(self, "同步完成", f"成功同步 {success_count}/{total_count} 个账号的cookies。")
+            else:
+                QMessageBox.warning(self, "同步失败", "没有账号的cookies被同步，请确保已有有效登录的账号。")
+            
+        except Exception as e:
+            print(f"同步账号cookies时出错: {str(e)}")
+            traceback.print_exc()
 
 def main():
     """程序入口"""

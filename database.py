@@ -40,9 +40,20 @@ class DatabaseManager:
                 folder_path TEXT,
                 last_updated TIMESTAMP,
                 cookies_status TEXT DEFAULT '正常',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                is_checked INTEGER DEFAULT 1
             )
             ''')
+            
+            # 检查是否需要添加is_checked列
+            cursor.execute("PRAGMA table_info(accounts)")
+            columns = cursor.fetchall()
+            column_names = [col[1] for col in columns]
+            
+            if 'is_checked' not in column_names:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN is_checked INTEGER DEFAULT 1")
+                conn.commit()
+                print("已添加is_checked字段到accounts表")
             
             # 创建视频数据表（如果不存在）
             cursor.execute('''
@@ -117,9 +128,10 @@ class DatabaseManager:
 
             conn.commit()
             conn.close()
-            print("数据库初始化成功")
+            print("数据库初始化完成")
         except Exception as e:
-            print(f"数据库初始化失败: {str(e)}")
+            print(f"初始化数据库结构失败: {str(e)}")
+            traceback.print_exc()
     
     def get_connection(self):
         """获取数据库连接"""
@@ -138,7 +150,7 @@ class DatabaseManager:
             cursor.execute('''
                 SELECT appid, name, cookies, cookies_status, total_uploads, 
                        today_videos, today_recommended, today_views, 
-                       pass_style, folder_path
+                       pass_style, folder_path, is_checked
                 FROM accounts
                 ORDER BY id
             ''')
@@ -149,7 +161,7 @@ class DatabaseManager:
             for row in rows:
                 appid, name, cookies_str, cookies_status, total_uploads, \
                 today_videos, today_recommended, today_views, \
-                pass_style, folder_path = row
+                pass_style, folder_path, is_checked = row
                 
                 account = {
                     'appid': appid,
@@ -161,7 +173,8 @@ class DatabaseManager:
                     'today_recommended': today_recommended,
                     'today_views': today_views,
                     'pass_style': bool(pass_style),
-                    'folder_path': folder_path
+                    'folder_path': folder_path,
+                    'is_checked': bool(is_checked) if is_checked is not None else True
                 }
                 accounts.append(account)
                 
@@ -172,13 +185,13 @@ class DatabaseManager:
             return []
     
     def get_account_cookies(self, appid):
-        """获取指定账号的cookies
+        """获取账号的cookies信息
         
         Args:
-            appid: 账号ID
+            appid (str): 账号ID
             
         Returns:
-            dict: cookies数据，如果未找到则返回None
+            dict or str: cookies信息，如果未找到则返回None
         """
         try:
             conn = self.get_connection()
@@ -192,10 +205,11 @@ class DatabaseManager:
                 try:
                     return json.loads(result[0])
                 except:
-                    pass
+                    return result[0]  # 如果不是JSON格式，直接返回字符串
             return None
         except Exception as e:
             print(f"获取账号cookies失败: {str(e)}")
+            traceback.print_exc()
             return None
     
     def update_account_style_status(self, appid, pass_style):
@@ -536,8 +550,8 @@ class DatabaseManager:
                 
             cursor.execute('''
                 INSERT OR REPLACE INTO accounts
-                (appid, name, cookies, folder_path, last_updated)
-                VALUES (?, ?, ?, ?, ?)
+                (appid, name, cookies, folder_path, last_updated, is_checked)
+                VALUES (?, ?, ?, ?, ?, 1)
             ''', (
                 appid, name, cookies, folder_path,
                 datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1585,6 +1599,114 @@ class DatabaseManager:
             
         except Exception as e:
             print(f"获取账号文件夹路径失败: {str(e)}")
+            traceback.print_exc()
+            return None
+
+    def update_account_check_status(self, appid, is_checked):
+        """更新账号勾选状态
+        
+        Args:
+            appid: 账号ID
+            is_checked: 是否勾选
+            
+        Returns:
+            bool: 是否更新成功
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE accounts
+                SET is_checked = ?
+                WHERE appid = ?
+            ''', (1 if is_checked else 0, appid))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"更新账号勾选状态失败: {str(e)}")
+            return False
+
+    def update_account_cookies(self, appid, cookies):
+        """更新账号的cookies
+        
+        Args:
+            appid: 账号ID
+            cookies: 新的cookies (字典或JSON字符串)
+            
+        Returns:
+            bool: 是否更新成功
+        """
+        try:
+            # 如果cookies是字典，则转换为JSON字符串
+            if isinstance(cookies, dict):
+                cookies_str = json.dumps(cookies)
+            else:
+                cookies_str = cookies
+                
+            # 更新日志
+            print(f"更新账号 {appid} 的cookies")
+            
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # 更新账号cookies，同时将cookies_status设为正常
+            cursor.execute(
+                "UPDATE accounts SET cookies = ?, cookies_status = '正常' WHERE appid = ?",
+                (cookies_str, appid)
+            )
+            
+            conn.commit()
+            
+            # 检查是否有更新
+            rowcount = cursor.rowcount
+            conn.close()
+            
+            if rowcount > 0:
+                print(f"账号 {appid} 的cookies更新成功")
+                return True
+            else:
+                print(f"账号 {appid} 的cookies更新失败，可能账号不存在")
+                return False
+        except Exception as e:
+            print(f"更新账号cookies时出错: {str(e)}")
+            traceback.print_exc()
+            return False
+
+    def get_recent_login_account(self):
+        """获取最近登录的账号
+        
+        Returns:
+            dict: 账号信息，包含appid、name等字段，如果没有找到则返回None
+        """
+        try:
+            self.log.info("获取最近登录的账号")
+            
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # 查询最近登录的账号
+            # 假设我们选择最后更新时间最近的账号作为最近登录的账号
+            cursor.execute(
+                "SELECT * FROM accounts ORDER BY id DESC LIMIT 1"
+            )
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result:
+                # 将查询结果转换为字典
+                columns = [description[0] for description in cursor.description]
+                account = dict(zip(columns, result))
+                self.log.info(f"找到最近更新的账号: {account['name']} ({account['appid']})")
+                return account
+            else:
+                self.log.warning("未找到任何账号记录")
+                return None
+        except Exception as e:
+            self.log.error(f"获取最近登录账号时出错: {str(e)}")
             traceback.print_exc()
             return None
 

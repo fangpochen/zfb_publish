@@ -95,21 +95,35 @@ class VideoAnalyzer:
             # 检查是否有选中的账号
             selected_accounts = []
             
-            # 确保UI中有accountTable组件
-            if not hasattr(self.ui, 'accountTable'):
-                self.log("UI中缺少accountTable组件")
-                return
-                
-            # 获取选中的账号
-            for row in range(self.ui.accountTable.rowCount()):
-                checkbox_item = self.ui.accountTable.item(row, 0)
-                if checkbox_item and checkbox_item.checkState() == Qt.Checked:
-                    appid = self.ui.accountTable.item(row, 2).text()
-                    name = self.ui.accountTable.item(row, 3).text()
-                    selected_accounts.append({
-                        'appid': appid,
-                        'name': name
-                    })
+            # 使用账号管理器获取选中的账号
+            if hasattr(self.parent, 'account_manager') and hasattr(self.parent.account_manager, 'get_selected_accounts'):
+                selected_accounts = self.parent.account_manager.get_selected_accounts()
+            else:
+                # 确保UI中有accountTable组件
+                if not hasattr(self.ui, 'accountTable'):
+                    self.log("UI中缺少accountTable组件")
+                    return
+                    
+                # 获取选中的账号
+                for row in range(self.ui.accountTable.rowCount()):
+                    # 获取单元格小部件（一个容器，其中包含QCheckBox）
+                    checkbox_container = self.ui.accountTable.cellWidget(row, 0)
+                    is_checked = False
+                    
+                    if checkbox_container:
+                        # 在容器中查找QCheckBox
+                        for child in checkbox_container.findChildren(QCheckBox):
+                            if child.isChecked():
+                                is_checked = True
+                                break
+                    
+                    if is_checked:
+                        appid = self.ui.accountTable.item(row, 2).text()
+                        name = self.ui.accountTable.item(row, 3).text()
+                        selected_accounts.append({
+                            'appid': appid,
+                            'name': name
+                        })
             
             if not selected_accounts:
                 QMessageBox.warning(self.parent, "提示", "请先选择至少一个账号")

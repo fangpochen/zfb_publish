@@ -1,0 +1,18 @@
+{
+    "test_account": {
+        "appid": "你的支付宝APPID",
+        "cookies": "你的支付宝cookies"
+    },
+    "test_videos_dir": "./test_videos",
+    "db_path": "./data/upload_stats.db",
+    "upload_settings": {
+        "upload_workers": 3,
+        "process_workers": 3,
+        "publish_workers": 3,
+        "max_retries": {
+            "upload": 3,
+            "process": 3,
+            "publish": 3
+        }
+    }
+} 

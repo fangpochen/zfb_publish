@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (QMessageBox, QInputDialog, QFileDialog,
 from PyQt5.QtCore import Qt, QDate
 import json
 from PyQt5.QtGui import QBrush, QColor
+import uuid
 
 from database import db_manager
 
@@ -54,18 +55,36 @@ class AccountManager:
             print("3. 更新表格...")
             self.ui.accountTable.setRowCount(0)
             
+            # 设置表格标题
+            column_titles = [
+                "选择", "序号", "账号ID", "账号名称", "今日视频", "今日推荐", 
+                "今日播放", "检测状态", "登录状态", "上传总数", "当前成功", "当前失败"
+            ]
+            
+            # 确保表格有足够的列
+            if self.ui.accountTable.columnCount() < len(column_titles):
+                self.ui.accountTable.setColumnCount(len(column_titles))
+                
+            # 设置列标题
+            for i, title in enumerate(column_titles):
+                self.ui.accountTable.setHorizontalHeaderItem(i, QTableWidgetItem(title))
+            
             for i, account in enumerate(self.accounts):
                 self.ui.accountTable.insertRow(i)
                 
                 # 第0列：复选框
                 checkbox = QCheckBox()
-                checkbox.setChecked(True)  # 默认选中
+                # 根据数据库中的is_checked字段设置复选框状态
+                checkbox.setChecked(account.get('is_checked', True))
                 checkbox_container = QWidget()
                 checkbox_layout = QVBoxLayout(checkbox_container)
                 checkbox_layout.addWidget(checkbox)
                 checkbox_layout.setAlignment(Qt.AlignCenter)
                 checkbox_layout.setContentsMargins(0, 0, 0, 0)
                 self.ui.accountTable.setCellWidget(i, 0, checkbox_container)
+                
+                # 连接复选框状态变化信号，保存到数据库
+                checkbox.stateChanged.connect(lambda state, app_id=account['appid']: self.on_checkbox_changed(app_id, state))
                 
                 # 第1列：序号
                 self.ui.accountTable.setItem(i, 1, QTableWidgetItem(str(i+1)))
@@ -79,105 +98,235 @@ class AccountManager:
                 # 第4列：今日视频数量 (today_videos)
                 self.ui.accountTable.setItem(i, 4, QTableWidgetItem(str(account['today_videos'] or '0')))
                 
-                # 第5列：今日推荐数量 (today_recommended)
+                # 第5列：今日推荐数 (today_recommended)
                 self.ui.accountTable.setItem(i, 5, QTableWidgetItem(str(account['today_recommended'] or '0')))
                 
                 # 第6列：今日播放量 (today_views)
                 self.ui.accountTable.setItem(i, 6, QTableWidgetItem(str(account['today_views'] or '0')))
                 
-                # 第7列：是否过画风 (pass_style)
-                pass_style = account['pass_style']
-                style_item = QTableWidgetItem()
-                if pass_style:
-                    style_item.setText("通过")
-                    style_item.setForeground(QBrush(QColor(0, 153, 0)))  # 绿色
+                # 第7列：通过检测
+                pass_style_item = QTableWidgetItem("通过" if account['pass_style'] else "未通过")
+                
+                # 根据通过状态设置颜色
+                if account['pass_style']:
+                    pass_style_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
                 else:
-                    style_item.setText("未通过")
-                    style_item.setForeground(QBrush(QColor(255, 0, 0)))  # 红色
-                self.ui.accountTable.setItem(i, 7, style_item)
+                    pass_style_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
+                    
+                self.ui.accountTable.setItem(i, 7, pass_style_item)
                 
                 # 第8列：Cookie状态 (cookies_status)
-                self.ui.accountTable.setItem(i, 8, QTableWidgetItem(str(account['cookies_status'] or '')))
+                cookie_item = QTableWidgetItem(str(account['cookies_status']))
                 
-                # 第9列：上传总数 (total_uploads)
-                self.ui.accountTable.setItem(i, 9, QTableWidgetItem(str(account['total_uploads'] or '0')))
+                # 根据Cookie状态设置颜色
+                if account['cookies_status'] == '正常':
+                    cookie_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
+                else:
+                    cookie_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
+                    
+                self.ui.accountTable.setItem(i, 8, cookie_item)
                 
-                # 第10列至第12列：其他字段 - 暂时留空
-                for col in range(10, 13):
-                    self.ui.accountTable.setItem(i, col, QTableWidgetItem(''))
-                
-                # 第13列和第14列：文件夹路径和视频数量
+                # 获取appid
                 appid = account['appid']
                 
-                # 尝试从folder_settings表获取完整信息
-                folder_info = None
-                if hasattr(self.db, 'get_folder_setting'):
-                    folder_info = self.db.get_folder_setting(appid)
+                # 第9列：上传总数（从folder_settings表获取max_uploads值）
+                max_uploads = 0
                 
-                # 如果从folder_settings获取到了信息
-                if folder_info and folder_info.get('folder_path'):
-                    folder_path = folder_info.get('folder_path')
-                    video_count = folder_info.get('total_files', 0)
+                # 获取文件夹设置信息
+                if hasattr(self.db, 'get_folder_settings'):
+                    folder_settings = self.db.get_folder_settings(appid)
+                    if folder_settings and len(folder_settings) > 0:
+                        # 获取第一个文件夹的最大上传数值
+                        max_uploads = folder_settings[0].get('max_uploads', 0)
+                
+                # 设置上传总数单元格
+                max_uploads_item = QTableWidgetItem(str(max_uploads))
+                self.ui.accountTable.setItem(i, 9, max_uploads_item)
+                
+                # 第10列：当前成功数
+                success_item = QTableWidgetItem("0")
+                success_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
+                self.ui.accountTable.setItem(i, 10, success_item)
+                
+                # 第11列：当前失败数
+                failed_item = QTableWidgetItem("0")
+                failed_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
+                self.ui.accountTable.setItem(i, 11, failed_item)
+                
+                # 添加文件夹路径和视频数量信息
+                folder_settings = None
+                if hasattr(self.db, 'get_folder_settings'):
+                    folder_settings = self.db.get_folder_settings(appid)
+                
+                if folder_settings and folder_settings:
+                    # 为每个账号添加文件夹路径和视频数量信息
+                    folder_path = folder_settings[0]['folder_path'] if folder_settings else ''
+                    total_files = folder_settings[0]['total_files'] if folder_settings else 0
                     
-                    # 设置文件夹路径到第13列 - 显示完整绝对路径
+                    # 确保有足够的列
+                    while self.ui.accountTable.columnCount() < 15:
+                        self.ui.accountTable.insertColumn(self.ui.accountTable.columnCount())
+                    
+                    # 显示文件夹路径
                     folder_item = QTableWidgetItem(folder_path)
                     folder_item.setToolTip(folder_path)
                     self.ui.accountTable.setItem(i, 13, folder_item)
                     
-                    # 设置视频数量到第14列
-                    count_item = QTableWidgetItem(f"{video_count}个")
+                    # 显示视频数量
+                    count_item = QTableWidgetItem(f"{total_files}个")
                     
                     # 根据视频数量设置不同颜色
-                    if video_count > 10:
+                    if total_files > 10:
                         count_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
-                    elif video_count > 0:
+                    elif total_files > 0:
                         count_item.setForeground(QBrush(QColor("#E6A23C")))  # 橙色
                     else:
                         count_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
-                        
+                    
                     self.ui.accountTable.setItem(i, 14, count_item)
-                else:
-                    # 使用accounts表中的数据
-                    folder_path = account['folder_path'] or ''
-                    if folder_path:
-                        # 显示完整路径
-                        folder_item = QTableWidgetItem(folder_path)
-                        folder_item.setToolTip(folder_path)
-                        self.ui.accountTable.setItem(i, 13, folder_item)
-                        
-                        # 计算视频数量
-                        video_count = self._count_video_files(folder_path)
-                        count_item = QTableWidgetItem(f"{video_count}个")
-                        
-                        # 根据视频数量设置不同颜色
-                        if video_count > 10:
-                            count_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
-                        elif video_count > 0:
-                            count_item.setForeground(QBrush(QColor("#E6A23C")))  # 橙色
-                        else:
-                            count_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
-                            
-                        self.ui.accountTable.setItem(i, 14, count_item)
-                        
-                        # 同步更新到folder_settings表
-                        if hasattr(self.db, 'save_account_folder'):
-                            self.db.save_account_folder(appid, folder_path)
-                    else:
-                        self.ui.accountTable.setItem(i, 13, QTableWidgetItem('未设置'))
-                        self.ui.accountTable.setItem(i, 14, QTableWidgetItem('0'))
                 
-                # 第15列：添加设置文件夹按钮
+                # 添加文件夹按钮
                 self.add_folder_button_to_row(i)
                 
+                # 设置每一行的高度
+                self.ui.accountTable.setRowHeight(i, 40)
+                
             # 调整列宽
-            print("4. 调整列宽...")
-            self.ui.accountTable.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+            self.ui.accountTable.setColumnWidth(0, 40)   # 复选框列
+            self.ui.accountTable.setColumnWidth(1, 50)   # 序号列
+            self.ui.accountTable.setColumnWidth(2, 150)  # 账号ID列
+            self.ui.accountTable.setColumnWidth(3, 120)
+            self.ui.accountTable.setColumnWidth(4, 80)   # 今日视频数量列
+            self.ui.accountTable.setColumnWidth(5, 80)   # 今日推荐数列
+            self.ui.accountTable.setColumnWidth(6, 80)   # 今日播放量列
+            self.ui.accountTable.setColumnWidth(7, 80)   # 通过检测列
+            self.ui.accountTable.setColumnWidth(8, 80)   # Cookie状态列
+            self.ui.accountTable.setColumnWidth(9, 80)   # 上传总数列
+            self.ui.accountTable.setColumnWidth(10, 80)  # 当前成功数列
+            self.ui.accountTable.setColumnWidth(11, 80)  # 当前失败数列
             
-            # 更新每个账号的画风信息
-            print("5. 更新完成")
+            # 为文件夹路径和视频数量列设置列宽
+            if self.ui.accountTable.columnCount() >= 15:
+                self.ui.accountTable.setColumnWidth(13, 200)  # 文件夹路径列
+                self.ui.accountTable.setColumnWidth(14, 80)   # 视频数量列
+            
+            # 隐藏垂直表头
+            self.ui.accountTable.verticalHeader().setVisible(False)
+            
+            # 设置表格禁止编辑
+            self.ui.accountTable.setEditTriggers(QHeaderView.NoEditTriggers)
+            
+            # 表格自适应宽度
+            self.ui.accountTable.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+            self.ui.accountTable.horizontalHeader().setStretchLastSection(True)
+            
+            print("4. 账号数据加载完成")
             
         except Exception as e:
-            print(f"[错误] 加载账号失败: {str(e)}")
+            self.log(f"加载账号数据失败: {str(e)}")
+            traceback.print_exc()
+            
+    def on_checkbox_changed(self, appid, state):
+        """复选框状态变化处理
+        
+        Args:
+            appid: 账号ID
+            state: 复选框状态
+        """
+        try:
+            # 更新数据库中的勾选状态
+            if hasattr(self.db, 'update_account_check_status'):
+                is_checked = (state == Qt.Checked)
+                self.db.update_account_check_status(appid, is_checked)
+                # 更新内存中账号数据
+                for account in self.accounts:
+                    if account['appid'] == appid:
+                        account['is_checked'] = is_checked
+                        break
+        except Exception as e:
+            self.log(f"更新账号勾选状态失败: {str(e)}")
+            traceback.print_exc()
+            
+    def select_all_accounts(self):
+        """选中所有账号"""
+        try:
+            updated_appids = []
+            for row in range(self.ui.accountTable.rowCount()):
+                # 获取单元格小部件（一个容器，其中包含QCheckBox）
+                checkbox_container = self.ui.accountTable.cellWidget(row, 0)
+                if checkbox_container:
+                    # 在容器中查找QCheckBox
+                    for child in checkbox_container.findChildren(QCheckBox):
+                        if not child.isChecked():  # 只更新未选中的复选框
+                            child.setChecked(True)
+                            # 获取appid
+                            appid_item = self.ui.accountTable.item(row, 2)
+                            if appid_item:
+                                updated_appids.append(appid_item.text())
+                        break
+            
+            # 批量更新数据库
+            if updated_appids and hasattr(self.db, 'get_connection'):
+                conn = self.db.get_connection()
+                cursor = conn.cursor()
+                try:
+                    for appid in updated_appids:
+                        cursor.execute('''
+                            UPDATE accounts
+                            SET is_checked = 1
+                            WHERE appid = ?
+                        ''', (appid,))
+                    conn.commit()
+                except Exception as e:
+                    self.log(f"批量更新勾选状态失败: {str(e)}")
+                    conn.rollback()
+                finally:
+                    conn.close()
+                    
+            self.log("已选中所有账号")
+        except Exception as e:
+            self.log(f"选中所有账号时出错: {str(e)}")
+            traceback.print_exc()
+    
+    def deselect_all_accounts(self):
+        """取消选中所有账号"""
+        try:
+            updated_appids = []
+            for row in range(self.ui.accountTable.rowCount()):
+                # 获取单元格小部件（一个容器，其中包含QCheckBox）
+                checkbox_container = self.ui.accountTable.cellWidget(row, 0)
+                if checkbox_container:
+                    # 在容器中查找QCheckBox
+                    for child in checkbox_container.findChildren(QCheckBox):
+                        if child.isChecked():  # 只更新已选中的复选框
+                            child.setChecked(False)
+                            # 获取appid
+                            appid_item = self.ui.accountTable.item(row, 2)
+                            if appid_item:
+                                updated_appids.append(appid_item.text())
+                        break
+            
+            # 批量更新数据库
+            if updated_appids and hasattr(self.db, 'get_connection'):
+                conn = self.db.get_connection()
+                cursor = conn.cursor()
+                try:
+                    for appid in updated_appids:
+                        cursor.execute('''
+                            UPDATE accounts
+                            SET is_checked = 0
+                            WHERE appid = ?
+                        ''', (appid,))
+                    conn.commit()
+                except Exception as e:
+                    self.log(f"批量更新勾选状态失败: {str(e)}")
+                    conn.rollback()
+                finally:
+                    conn.close()
+                    
+            self.log("已取消选中所有账号")
+        except Exception as e:
+            self.log(f"取消选中所有账号时出错: {str(e)}")
             traceback.print_exc()
     
     def update_account_table(self, accounts):
@@ -197,6 +346,19 @@ class AccountManager:
             
             # 记录过滤后的账号
             self.filtered_accounts = accounts
+            
+            # 确保表格有足够的列
+            column_titles = [
+                "选择", "序号", "账号ID", "账号名称", "今日视频", "今日推荐", 
+                "今日播放", "检测状态", "登录状态", "上传总数", "当前成功", "当前失败"
+            ]
+            
+            if self.ui.accountTable.columnCount() < len(column_titles):
+                self.ui.accountTable.setColumnCount(len(column_titles))
+                
+            # 设置列标题
+            for i, title in enumerate(column_titles):
+                self.ui.accountTable.setHorizontalHeaderItem(i, QTableWidgetItem(title))
             
             # 添加账号数据到表格
             for i, account in enumerate(accounts):
@@ -233,8 +395,18 @@ class AccountManager:
                 item_name = QTableWidgetItem(name)
                 self.ui.accountTable.setItem(i, 3, item_name)
                 
+                # 第10列：当前成功数
+                success_item = QTableWidgetItem("0")
+                success_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
+                self.ui.accountTable.setItem(i, 10, success_item)
+                
+                # 第11列：当前失败数
+                failed_item = QTableWidgetItem("0")
+                failed_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
+                self.ui.accountTable.setItem(i, 11, failed_item)
+                
                 # 其他列根据需要填充
-                for col in range(4, self.ui.accountTable.columnCount()):
+                for col in [4, 5, 6, 7, 8, 9]:
                     self.ui.accountTable.setItem(i, col, QTableWidgetItem(''))
                 
                 # 设置每一行的高度
@@ -351,105 +523,6 @@ class AccountManager:
             self.log(f"搜索账号时出错: {str(e)}")
             traceback.print_exc()
     
-    def select_all_accounts(self):
-        """选中所有账号"""
-        try:
-            for row in range(self.ui.accountTable.rowCount()):
-                checkbox_item = self.ui.accountTable.item(row, 0)
-                if checkbox_item:
-                    checkbox_item.setCheckState(Qt.Checked)
-            self.log("已选中所有账号")
-        except Exception as e:
-            self.log(f"选中所有账号时出错: {str(e)}")
-            traceback.print_exc()
-    
-    def deselect_all_accounts(self):
-        """取消选中所有账号"""
-        try:
-            for row in range(self.ui.accountTable.rowCount()):
-                checkbox_item = self.ui.accountTable.item(row, 0)
-                if checkbox_item:
-                    checkbox_item.setCheckState(Qt.Unchecked)
-            self.log("已取消选中所有账号")
-        except Exception as e:
-            self.log(f"取消选中所有账号时出错: {str(e)}")
-            traceback.print_exc()
-    
-    def clear_account_data(self, clear_all=False):
-        """清空账号数据
-        
-        Args:
-            clear_all: 是否清空所有账号的数据
-        """
-        try:
-            if clear_all:
-                # 确认清空所有账号数据
-                reply = QMessageBox.question(
-                    self.parent, "确认清空", 
-                    "确定要清空所有账号的数据吗？此操作不可撤销。",
-                    QMessageBox.Yes | QMessageBox.No, 
-                    QMessageBox.No
-                )
-                
-                if reply == QMessageBox.Yes:
-                    # 直接清空accounts表
-                    conn = self.db.get_connection()
-                    cursor = conn.cursor()
-                    try:
-                        cursor.execute("DELETE FROM accounts")
-                        conn.commit()
-                        self.log("成功清空所有账号数据")
-                        # 重新加载账号列表
-                        self.load_accounts()
-                    except Exception as e:
-                        self.log(f"清空数据库失败: {str(e)}")
-                        conn.rollback()
-                        QMessageBox.warning(self.parent, "错误", "清空账号数据失败")
-                    finally:
-                        conn.close()
-            else:
-                # 清空选中账号的数据
-                selected_rows = []
-                for row in range(self.ui.accountTable.rowCount()):
-                    checkbox_item = self.ui.accountTable.item(row, 0)
-                    if checkbox_item and checkbox_item.checkState() == Qt.Checked:
-                        selected_rows.append(row)
-                
-                if not selected_rows:
-                    QMessageBox.warning(self.parent, "提示", "请先选择至少一个账号")
-                    return
-                    
-                # 确认清空
-                reply = QMessageBox.question(
-                    self.parent, "确认清空", 
-                    f"确定要清空选中的 {len(selected_rows)} 个账号的数据吗？此操作不可撤销。",
-                    QMessageBox.Yes | QMessageBox.No, 
-                    QMessageBox.No
-                )
-                
-                if reply == QMessageBox.Yes:
-                    # 执行清空
-                    conn = self.db.get_connection()
-                    cursor = conn.cursor()
-                    try:
-                        for row in selected_rows:
-                            appid = self.ui.accountTable.item(row, 2).text()
-                            cursor.execute("DELETE FROM accounts WHERE appid = ?", (appid,))
-                        conn.commit()
-                        self.log(f"成功清空 {len(selected_rows)} 个账号的数据")
-                        # 重新加载账号列表
-                        self.load_accounts()
-                    except Exception as e:
-                        self.log(f"清空数据库失败: {str(e)}")
-                        conn.rollback()
-                        QMessageBox.warning(self.parent, "错误", "清空账号数据失败")
-                    finally:
-                        conn.close()
-                        
-        except Exception as e:
-            self.log(f"清空账号数据时出错: {str(e)}")
-            traceback.print_exc()
-    
     def login_new_account(self):
         """登录新账号，获取cookie和账号信息"""
         try:
@@ -462,19 +535,39 @@ class AccountManager:
                 cookies_dict, appid, user_name, all_request = result
                 self.log(f"登录成功: {user_name} ({appid})")
                 
+                # 询问是否要同步cookies到所有账号
+                sync_reply = QMessageBox.question(
+                    self.parent, "同步cookies", 
+                    "是否将该账号的cookies同步给所有账号？\n这将使所有账号使用相同的登录凭证。",
+                    QMessageBox.Yes | QMessageBox.No, 
+                    QMessageBox.Yes
+                )
+                
+                if sync_reply == QMessageBox.Yes:
+                    self.log("开始同步cookies到所有账号...")
+                    success_count, total_count = self.sync_all_accounts_cookies(appid)
+                    if success_count > 0:
+                        self.log(f"成功同步cookies到 {success_count}/{total_count} 个账号")
+                        QMessageBox.information(self.parent, "同步完成", f"成功同步cookies到 {success_count}/{total_count} 个账号")
+                    else:
+                        self.log("没有账号需要同步cookies")
+                
                 # 重新加载账号列表
                 self.load_accounts()
                 
                 # 显示成功提示
                 QMessageBox.information(self.parent, "登录成功", f"成功登录账号: {user_name}")
+                return True
             else:
                 self.log("登录失败")
                 QMessageBox.warning(self.parent, "登录失败", "登录失败，请重试")
+                return False
                 
         except Exception as e:
             self.log(f"登录新账号时出错: {str(e)}")
             traceback.print_exc()
             QMessageBox.critical(self.parent, "登录出错", f"登录过程中出现错误: {str(e)}")
+            return False
     
     def fetch_sub_accounts(self):
         """获取子账号列表"""
@@ -496,11 +589,11 @@ class AccountManager:
                     appid = account[0]
                     cookies_str = account[1]
                     name = account[2]
-                    
-                    # 解析cookies
+            
+            # 解析cookies
                     cookies = json.loads(cookies_str) if isinstance(cookies_str, str) else cookies_str
-                    
-                    # 调用API获取子账号
+            
+            # 调用API获取子账号
                     self.log(f"开始获取账号 {name} ({appid}) 的子账号...")
                     sub_accounts = self.api_client.get_life_option_list(cookies, appid)
                     
@@ -532,7 +625,7 @@ class AccountManager:
         except Exception as e:
             self.log(f"获取子账号时出错: {str(e)}")
             traceback.print_exc()
-            QMessageBox.critical(self.parent, "获取子账号出错", f"获取子账号过程中出现错误: {str(e)}")
+            QMessageBox.critical(self.parent, "获取子账号出错", f"获取子账号过程中出现错误: {str(e)}") 
     
     def add_folder_button_to_row(self, row):
         """为表格行添加文件夹按钮
@@ -589,55 +682,47 @@ class AccountManager:
                 self.log("未选择文件夹")
                 return
                 
-            # 设置账号文件夹
-            if self.set_account_folder(appid, folder_path):
-                # 获取已保存的文件夹信息（包括视频数量）
-                folder_info = None
-                if hasattr(self.db, 'get_folder_setting'):
-                    folder_info = self.db.get_folder_setting(appid, folder_path)
+            # 确保目录存在
+            if not os.path.exists(folder_path):
+                self.log(f"所选文件夹不存在: {folder_path}")
+                return
+            
+            # 计算视频文件数量
+            video_count = self._count_video_files(folder_path)
+            
+            # 更新数据库中的文件夹设置
+            update_success = False
+            default_max_uploads = 50  # 默认最大上传数
+            
+            if hasattr(self.db, 'add_folder'):
+                # 正确地调用add_folder方法，传递单独的参数而不是字典
+                update_success = self.db.add_folder(appid, folder_path, default_max_uploads, video_count)
+            elif hasattr(self.db, 'save_account_folder'):
+                # 使用旧的save_account_folder方法
+                update_success = self.db.save_account_folder(appid, folder_path)
+            
+            if update_success:
+                # 确保有足够的列
+                while self.ui.accountTable.columnCount() < 15:
+                    self.ui.accountTable.insertColumn(self.ui.accountTable.columnCount())
                 
-                if folder_info and folder_info.get('folder_path') and 'total_files' in folder_info:
-                    # 使用数据库中的信息
-                    folder_path = folder_info.get('folder_path')
-                    video_count = folder_info.get('total_files', 0)
-                    
-                    # 更新文件夹路径列 - 显示完整绝对路径
-                    folder_item = QTableWidgetItem(folder_path)
-                    folder_item.setToolTip(folder_path)
-                    self.ui.accountTable.setItem(row, 13, folder_item)
-                    
-                    # 更新视频数量列
-                    count_item = QTableWidgetItem(f"{video_count}个")
-                    
-                    # 根据视频数量设置不同颜色
-                    if video_count > 10:
-                        count_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
-                    elif video_count > 0:
-                        count_item.setForeground(QBrush(QColor("#E6A23C")))  # 橙色
-                    else:
-                        count_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
-                        
-                    self.ui.accountTable.setItem(row, 14, count_item)
+                # 更新文件夹路径列 - 显示完整绝对路径
+                folder_item = QTableWidgetItem(folder_path)
+                folder_item.setToolTip(folder_path)
+                self.ui.accountTable.setItem(row, 13, folder_item)
+                
+                # 更新视频数量列
+                count_item = QTableWidgetItem(f"{video_count}个")
+                
+                # 根据视频数量设置不同颜色
+                if video_count > 10:
+                    count_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
+                elif video_count > 0:
+                    count_item.setForeground(QBrush(QColor("#E6A23C")))  # 橙色
                 else:
-                    # 手动计算并显示
-                    # 更新文件夹路径列 - 显示完整绝对路径
-                    folder_item = QTableWidgetItem(folder_path)
-                    folder_item.setToolTip(folder_path)
-                    self.ui.accountTable.setItem(row, 13, folder_item)
+                    count_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
                     
-                    # 更新视频数量列
-                    video_count = self._count_video_files(folder_path)
-                    count_item = QTableWidgetItem(f"{video_count}个")
-                    
-                    # 根据视频数量设置不同颜色
-                    if video_count > 10:
-                        count_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
-                    elif video_count > 0:
-                        count_item.setForeground(QBrush(QColor("#E6A23C")))  # 橙色
-                    else:
-                        count_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
-                        
-                    self.ui.accountTable.setItem(row, 14, count_item)
+                self.ui.accountTable.setItem(row, 14, count_item)
                 
                 self.log(f"已为账号 {appid} 设置文件夹: {folder_path}，视频数量: {video_count}个")
             else:
@@ -921,17 +1006,25 @@ class AccountManager:
         """获取选中的账号及其文件夹信息
         
         Returns:
-            dict: 账号与其文件夹、cookies的映射字典 {appid: {'folder': folder_path, 'cookies': cookies}}
+            list: 账号与文件夹信息列表 [{account: 账号信息, folders: 文件夹列表}]
         """
         try:
             if not hasattr(self.ui, 'accountTable'):
-                return {}
+                return []
                 
-            account_folders = {}
+            account_folders = []
             for row in range(self.ui.accountTable.rowCount()):
                 # 检查是否选中
-                checkbox_item = self.ui.accountTable.cellWidget(row, 0)
-                if not checkbox_item or not hasattr(checkbox_item, 'isChecked') or not checkbox_item.isChecked():
+                checkbox_container = self.ui.accountTable.cellWidget(row, 0)
+                is_checked = False
+                
+                if checkbox_container:
+                    for child in checkbox_container.findChildren(QCheckBox):
+                        if child.isChecked():
+                            is_checked = True
+                            break
+                
+                if not is_checked:
                     continue
                     
                 # 获取appid
@@ -940,28 +1033,62 @@ class AccountManager:
                     continue
                     
                 appid = appid_item.text()
+                name_item = self.ui.accountTable.item(row, 3)
+                name = name_item.text() if name_item else ""
                 
-                # 获取文件夹路径
-                folder_path = self.get_account_folder(appid)
-                if not folder_path:
-                    continue
-                    
-                # 获取cookies
-                cookies = self.get_account_cookies(appid)
-                if not cookies:
-                    continue
-                    
-                account_folders[appid] = {
-                    'folder': folder_path,
-                    'cookies': cookies
+                # 获取账号信息
+                account = {
+                    'appid': appid,
+                    'name': name
                 }
+                
+                # 获取cookies
+                cookies_dict = self.get_account_cookies(appid)
+                if not cookies_dict:
+                    continue
+                    
+                account['cookies'] = cookies_dict
+                
+                # 获取文件夹信息
+                folders = []
+                try:
+                    folder_path = self.get_account_folder(appid)
+                    if folder_path:
+                        # 检查folder_path是否为字典类型，提取实际路径
+                        actual_path = ''
+                        if isinstance(folder_path, dict):
+                            # 从字典中提取实际路径
+                            actual_path = folder_path.get('folder_path', '')
+                        else:
+                            actual_path = folder_path
+                        
+                        # 添加到账号对象中（方便直接访问）
+                        account['folder_path'] = actual_path
+                        
+                        # 只有在路径非空且存在时才添加到文件夹列表
+                        if actual_path and os.path.exists(actual_path):
+                            folders.append({
+                                'path': actual_path,
+                                'limit': 10  # 默认限制
+                            })
+                        else:
+                            self.log(f"文件夹路径无效或不存在: '{actual_path}'")
+                except Exception as e:
+                    self.log(f"处理账号 {appid} 的文件夹时出错: {str(e)}")
+                    traceback.print_exc()
+                
+                # 添加到结果列表
+                account_folders.append({
+                    'account': account,
+                    'folders': folders
+                })
                 
             return account_folders
             
         except Exception as e:
             self.log(f"获取选中账号文件夹失败: {str(e)}")
             traceback.print_exc()
-            return {}
+            return []
     
     def get_account_cookies(self, appid):
         """获取指定账号的cookies
@@ -994,4 +1121,129 @@ class AccountManager:
         except Exception as e:
             self.log(f"获取账号cookies失败: {str(e)}")
             traceback.print_exc()
-            return None 
+            return None
+    
+    def get_selected_accounts(self):
+        """获取选中的账号列表
+        
+        Returns:
+            list: 包含选中账号信息的列表，每个元素是一个字典
+        """
+        try:
+            if not hasattr(self.ui, 'accountTable'):
+                return []
+                
+            selected_accounts = []
+            for row in range(self.ui.accountTable.rowCount()):
+                # 获取单元格小部件（一个容器，其中包含QCheckBox）
+                checkbox_container = self.ui.accountTable.cellWidget(row, 0)
+                is_checked = False
+                
+                if checkbox_container:
+                    # 在容器中查找QCheckBox
+                    for child in checkbox_container.findChildren(QCheckBox):
+                        if child.isChecked():
+                            is_checked = True
+                            break
+                
+                if is_checked:
+                    # 获取账号信息
+                    appid_item = self.ui.accountTable.item(row, 2)
+                    name_item = self.ui.accountTable.item(row, 3)
+                    
+                    if appid_item and name_item:
+                        selected_accounts.append({
+                            'appid': appid_item.text(),
+                            'name': name_item.text(),
+                            'cookies_dict': self.get_account_cookies(appid_item.text())
+                        })
+            
+            return selected_accounts
+            
+        except Exception as e:
+            self.log(f"获取选中账号失败: {str(e)}")
+            traceback.print_exc()
+            return []
+    
+    def sync_all_accounts_cookies(self, source_appid=None):
+        """同步所有账号的cookies
+        
+        Args:
+            source_appid: 源账号ID，如果为None则使用最近一次登录的账号
+            
+        Returns:
+            tuple: (成功更新的账号数, 总账号数)
+        """
+        try:
+            self.log("开始同步所有账号的cookies...")
+            
+            # 如果没有指定源账号，尝试查找最近登录的账号
+            if not source_appid:
+                try:
+                    # 从数据库查询最近登录的账号
+                    recent_account = self.db.get_recent_login_account()
+                    if recent_account:
+                        source_appid = recent_account['appid']
+                        self.log(f"使用最近登录的账号 {recent_account['name']}({source_appid}) 的cookies进行同步")
+                    else:
+                        self.log("未找到最近登录的账号，请指定一个源账号")
+                        return 0, 0
+                except Exception as e:
+                    self.log(f"查询最近登录账号失败: {str(e)}")
+                    return 0, 0
+            
+            # 获取源账号的cookies
+            try:
+                source_cookies = self.db.get_account_cookies(source_appid)
+                if not source_cookies:
+                    self.log(f"源账号 {source_appid} 没有有效的cookies")
+                    return 0, 0
+                
+                self.log(f"成功获取源账号 {source_appid} 的cookies")
+            except Exception as e:
+                self.log(f"获取源账号cookies失败: {str(e)}")
+                return 0, 0
+            
+            # 获取所有账号
+            try:
+                all_accounts = self.db.load_accounts()
+                if not all_accounts:
+                    self.log("数据库中没有账号")
+                    return 0, 0
+                
+                total_count = len(all_accounts)
+                self.log(f"找到 {total_count} 个账号")
+            except Exception as e:
+                self.log(f"获取账号列表失败: {str(e)}")
+                return 0, 0
+            
+            # 更新所有账号的cookies
+            success_count = 0
+            for account in all_accounts:
+                current_appid = account['appid']
+                current_name = account['name']
+                
+                # 跳过源账号
+                if current_appid == source_appid:
+                    continue
+                
+                try:
+                    # 更新账号的cookies
+                    if self.db.update_account_cookies(current_appid, source_cookies):
+                        success_count += 1
+                        self.log(f"成功更新账号 {current_name}({current_appid}) 的cookies")
+                    else:
+                        self.log(f"更新账号 {current_name}({current_appid}) 的cookies失败")
+                except Exception as e:
+                    self.log(f"更新账号 {current_name}({current_appid}) 的cookies失败: {str(e)}")
+            
+            self.log(f"cookies同步完成，成功更新 {success_count}/{total_count-1} 个账号")
+            
+            # 重新加载账号列表以刷新UI
+            self.load_accounts()
+            
+            return success_count, total_count-1
+        except Exception as e:
+            self.log(f"同步账号cookies时出错: {str(e)}")
+            traceback.print_exc()
+            return 0, 0 
