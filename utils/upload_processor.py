@@ -619,12 +619,6 @@ class UploadProcessor:
                     except Exception as e:
                         self.logger.warning(f"发送失败信号失败，UI对象可能已关闭: {str(e)}")
             
-            # 保存任务记录
-            try:
-                self.statistics.save_upload_record(task)
-            except Exception as e:
-                self.logger.error(f"保存上传记录时出错: {str(e)}")
-                traceback.print_exc()
             
             # 输出当前统计数据到日志
             with self.stats_lock:
@@ -736,7 +730,6 @@ class UploadProcessor:
             # 获取MT令牌
             try:
                 if not task.mt:
-                    self.logger.info(f'获取MT令牌111{task.cookies}')
                     task.mt = self.api_client.get_mt(task.cookies)
                     if not task.mt:
                         error_msg = "获取MT令牌失败"

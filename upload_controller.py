@@ -104,6 +104,9 @@ class UploadController:
                     self.log_message("上传标签页没有布局")
             else:
                 self.log_message("未找到上传标签页")
+                
+        # 添加刷新统计按钮到UI
+        self.add_refresh_button_to_ui()
         
         # 连接信号
         self.connect_signals()
@@ -115,6 +118,61 @@ class UploadController:
         
         # 记录当前添加的任务
         self.tasks = []
+    
+    def add_refresh_button_to_ui(self):
+        """添加刷新统计按钮到上传UI"""
+        try:
+            # 检查上传UI是否已有刷新按钮
+            if hasattr(self.upload_ui, 'refresh_stats_button'):
+                self.log_message("上传UI已有刷新统计按钮")
+                return
+                
+            # 检查是否有设置区域
+            if hasattr(self.upload_ui, 'settings_layout'):
+                # 创建刷新按钮
+                self.upload_ui.refresh_stats_button = QPushButton("刷新统计")
+                self.upload_ui.refresh_stats_button.setToolTip("手动刷新上传统计数据")
+                self.upload_ui.refresh_stats_button.clicked.connect(self.manual_refresh_stats)
+                
+                # 添加到设置布局
+                self.upload_ui.settings_layout.addWidget(self.upload_ui.refresh_stats_button)
+                self.log_message("成功添加刷新统计按钮到上传UI")
+            elif hasattr(self.account_manager, 'ui') and hasattr(self.account_manager.ui, 'accountTab'):
+                # 创建刷新按钮并添加到账号标签页
+                from PyQt5.QtWidgets import QHBoxLayout
+                
+                # 检查是否已有按钮布局
+                button_layout = None
+                if hasattr(self.account_manager.ui, 'account_button_layout'):
+                    button_layout = self.account_manager.ui.account_button_layout
+                else:
+                    # 创建新的按钮布局
+                    button_layout = QHBoxLayout()
+                    self.account_manager.ui.account_button_layout = button_layout
+                    
+                    # 获取账号标签页布局
+                    account_tab_layout = self.account_manager.ui.accountTab.layout()
+                    if account_tab_layout:
+                        account_tab_layout.addLayout(button_layout)
+                
+                # 创建并添加刷新按钮
+                if button_layout:
+                    refresh_button = QPushButton("刷新统计")
+                    refresh_button.setToolTip("手动刷新上传统计数据")
+                    refresh_button.clicked.connect(self.manual_refresh_stats)
+                    
+                    # 保存引用
+                    self.upload_ui.refresh_stats_button = refresh_button
+                    
+                    # 添加到布局
+                    button_layout.addWidget(refresh_button)
+                    self.log_message("成功添加刷新统计按钮到账号标签页")
+            else:
+                self.log_message("未找到合适的位置添加刷新统计按钮")
+                
+        except Exception as e:
+            self.log_message(f"添加刷新统计按钮时出错: {str(e)}")
+            traceback.print_exc()
     
     def log_message(self, message):
         """记录日志消息
@@ -204,8 +262,27 @@ class UploadController:
             if reply != QMessageBox.Yes:
                 return
                 
-            # 开始上传
-            topics = self.get_topics()
+            # 获取话题信息，并进行验证
+            try:
+                topics = self.get_topics()
+                
+                if not topics:
+                    QMessageBox.warning(self.parent, "上传提示", "未设置话题，请先搜索并选择话题")
+                    return
+                
+                # 打印话题信息进行调试
+                if isinstance(topics, dict) and 'topicInfoVOList' in topics:
+                    topic_count = len(topics['topicInfoVOList'])
+                    topic_names = [t.get('topicName', '') for t in topics['topicInfoVOList']]
+                    self.log_message(f"上传将使用 {topic_count} 个话题: {topic_names}")
+                else:
+                    self.log_message(f"上传将使用话题: {topics}")
+                
+            except Exception as e:
+                # 话题验证失败，显示友好的错误提示
+                QMessageBox.warning(self.parent, "上传提示", f"话题数据验证失败: {str(e)}\n请先搜索并选择有效的话题")
+                self.log_message(f"话题验证失败: {str(e)}")
+                return
             
             # 启动上传处理器
             if not self.upload_processor._is_running:
@@ -262,12 +339,16 @@ class UploadController:
             if self.tasks:
                 self.upload_ui.set_upload_in_progress(True)
                 self.log_message(f"开始上传 {len(self.tasks)} 个视频")
+                
+                # 上传开始后强制刷新一次表格
+                QTimer.singleShot(1000, self.force_update_stats)
             else:
                 self.log_message("未添加任何上传任务")
                 
         except Exception as e:
             self.log_message(f"开始上传时出错: {str(e)}")
             traceback.print_exc()
+            QMessageBox.critical(self.parent, "上传错误", f"开始上传时出错: {str(e)}")
     
     def stop_upload(self):
         """停止上传"""
@@ -535,6 +616,43 @@ class UploadController:
             traceback.print_exc()
             QMessageBox.critical(self.parent, "搜索话题", f"搜索话题过程中出现错误: {str(e)}")
     
+    def force_update_stats(self):
+        """强制刷新统计数据和表格显示"""
+        try:
+            # 直接更新表格 - 强制刷新
+            if hasattr(self.account_manager, 'ui') and hasattr(self.account_manager.ui, 'accountTable'):
+                table = self.account_manager.ui.accountTable
+                if table:
+                    # 更新表格显示
+                    table.viewport().update()
+                    table.update()
+                    self.log_message("已强制刷新账号表格")
+                    
+                    # 尝试更新tab页
+                    if hasattr(self.account_manager.ui, 'accountTab'):
+                        self.account_manager.ui.accountTab.update()
+                    
+                    # 尝试刷新整个窗口
+                    if self.parent:
+                        self.parent.update()
+                    
+                    # 尝试应用样式
+                    if hasattr(self.account_manager, 'refresh_account_table'):
+                        self.account_manager.refresh_account_table()
+                        self.log_message("已调用账号管理器的刷新方法")
+                    
+                    # 更新统计数据
+                    self.update_task_stats()
+                    
+                    # 尝试重新加载账号
+                    if hasattr(self.account_manager, 'load_accounts'):
+                        self.account_manager.load_accounts()
+                        self.log_message("已重新加载账号数据")
+            
+        except Exception as e:
+            self.log_message(f"强制刷新统计数据时出错: {str(e)}")
+            traceback.print_exc()
+
     def show_topic_selection_dialog(self, topics):
         """显示话题选择对话框
         
@@ -644,7 +762,6 @@ class UploadController:
                     
                     # 首先保存到控制器自己的存储中
                     self.current_topic_info = topic_info_obj
-                    self.log_message(f"已保存话题信息到控制器: {json.dumps(topic_info_obj, ensure_ascii=False)}")
                     
                     # 尝试保存到主窗口
                     from PyQt5.QtWidgets import QApplication
@@ -724,6 +841,9 @@ class UploadController:
                             self.log_message(f"已保存选中项话题信息到主窗口: {json.dumps(topic_info_obj, ensure_ascii=False)}")
                         
                         self.log_message(f"已选择 {len(items)} 个话题: {current_topics}")
+                
+                # 强制刷新统计数据和表格显示
+                QTimer.singleShot(500, self.force_update_stats)
                 
                 dialog.accept()
             
@@ -863,7 +983,6 @@ class UploadController:
         """
         try:
             file_name = os.path.basename(file_path)
-            self.log_message(f"上传进度: {file_name} - {progress}% - {status}")
             
             # 更新UI进度条
             if hasattr(self.upload_ui, 'update_progress_bar'):
@@ -872,60 +991,203 @@ class UploadController:
         except Exception as e:
             self.log_message(f"更新上传进度时出错: {str(e)}")
     
-    def on_upload_success(self, trace_id, file_path, video_url):
-        """上传成功回调
-        
-        Args:
-            trace_id: 任务ID
-            file_path: 文件路径
-            video_url: 视频URL
-        """
-        try:
-            file_name = os.path.basename(file_path)
-            self.log_message(f"上传成功: {file_name} - {video_url}")
-            
-            # 更新UI
-            if hasattr(self.upload_ui, 'update_upload_success'):
-                self.upload_ui.update_upload_success(file_name)
-                
-        except Exception as e:
-            self.log_message(f"处理上传成功时出错: {str(e)}")
-    
-    def on_upload_failed(self, trace_id, file_path, error):
-        """上传失败回调
-        
-        Args:
-            trace_id: 任务ID
-            file_path: 文件路径
-            error: 错误信息
-        """
-        try:
-            file_name = os.path.basename(file_path)
-            self.log_message(f"上传失败: {file_name} - {error}")
-            
-            # 更新UI
-            if hasattr(self.upload_ui, 'update_upload_failed'):
-                self.upload_ui.update_upload_failed(file_name, error)
-                
-        except Exception as e:
-            self.log_message(f"处理上传失败时出错: {str(e)}")
-    
-    def on_account_finished(self, account_id):
-        """账号任务完成回调
+    def update_account_row_stats(self, account_id, success_count=0, failed_count=0, set_value=False, success_value=0, failed_value=0):
+        """直接更新指定账号的统计数据到表格
         
         Args:
             account_id: 账号ID
+            success_count: 成功数量
+            failed_count: 失败数量
+            set_value: 是否设置为新值
+            success_value: 成功值
+            failed_value: 失败值
         """
         try:
-            self.log_message(f"账号 {account_id} 的任务已全部完成")
+            self.log_message(f"直接更新账号 {account_id} 的统计: {'设置为' if set_value else '增加'} 成功:{success_value if set_value else success_count}, 失败:{failed_value if set_value else failed_count}")
             
-            # 更新UI
-            if hasattr(self.upload_ui, 'update_account_finished'):
-                self.upload_ui.update_account_finished(account_id)
+            # 确保账号ID是字符串格式
+            account_id = str(account_id).strip()
+            
+            # 获取表格实例
+            if not hasattr(self.account_manager, 'ui') or not hasattr(self.account_manager.ui, 'accountTable'):
+                self.log_message("无法获取账号表格实例")
+                return
                 
+            table = self.account_manager.ui.accountTable
+            if not table:
+                self.log_message("账号表格对象为空")
+                return
+                
+            # 查找账号ID对应的行
+            found_row = -1
+            for row in range(table.rowCount()):
+                account_id_item = table.item(row, 2)  # 第3列是账号ID
+                if not account_id_item:
+                    continue
+                    
+                table_account_id = account_id_item.text().strip()
+                if table_account_id == account_id:
+                    found_row = row
+                    break
+                    
+            if found_row == -1:
+                self.log_message(f"未在表格中找到账号 {account_id}")
+                return
+                
+            # 找到当前成功和失败列的索引
+            success_col_index = -1
+            failed_col_index = -1
+            
+            # 查找列标题
+            if table.columnCount() >= 10:
+                for col in range(table.columnCount()):
+                    header_item = table.horizontalHeaderItem(col)
+                    if header_item:
+                        header_text = header_item.text()
+                        if "当前成功" in header_text:
+                            success_col_index = col
+                        elif "当前失败" in header_text:
+                            failed_col_index = col
+            
+            # 如果没有找到列标题，使用默认索引
+            if success_col_index == -1:
+                success_col_index = 10  # 默认当前成功列索引
+            if failed_col_index == -1:
+                failed_col_index = 11  # 默认当前失败列索引
+                
+            # 确保索引有效
+            if success_col_index < 0 or failed_col_index < 0 or success_col_index >= table.columnCount() or failed_col_index >= table.columnCount():
+                self.log_message(f"无效的列索引: 成功({success_col_index}), 失败({failed_col_index})")
+                return
+                
+            # 设置表格单元格的值
+            # 设置当前成功数
+            current_success_item = table.item(found_row, success_col_index)
+            current_success = 0
+            if current_success_item:
+                try:
+                    current_success = int(current_success_item.text())
+                except (ValueError, TypeError) as e:
+                    self.log_message(f"解析成功数量失败: {e}, 使用默认值0")
+            
+            # 根据模式设置新值
+            if set_value:
+                new_success = success_value
+            else:
+                new_success = current_success + success_count
+            
+            # 创建新表格项
+            success_item = QTableWidgetItem(str(new_success))
+            success_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
+            success_item.setTextAlignment(Qt.AlignCenter)  # 居中对齐
+            
+            # 直接设置，并立即刷新
+            table.setItem(found_row, success_col_index, success_item)
+            self.log_message(f"已设置行 {found_row} 列 {success_col_index} 的值为 {new_success}")
+            
+            # 设置当前失败数
+            current_failed_item = table.item(found_row, failed_col_index)
+            current_failed = 0
+            if current_failed_item:
+                try:
+                    current_failed = int(current_failed_item.text())
+                except (ValueError, TypeError) as e:
+                    self.log_message(f"解析失败数量失败: {e}, 使用默认值0")
+            
+            # 根据模式设置新值
+            if set_value:
+                new_failed = failed_value
+            else:
+                new_failed = current_failed + failed_count
+            
+            # 创建新表格项
+            failed_item = QTableWidgetItem(str(new_failed))
+            failed_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
+            failed_item.setTextAlignment(Qt.AlignCenter)  # 居中对齐
+            
+            # 直接设置，并立即刷新
+            table.setItem(found_row, failed_col_index, failed_item)
+            self.log_message(f"已设置行 {found_row} 列 {failed_col_index} 的值为 {new_failed}")
+            
+            # 如果有必要，确保单元格可见
+            table.scrollToItem(success_item)
+            
+            # 直接调用QApplication处理所有待处理的事件，确保UI更新
+            from PyQt5.QtWidgets import QApplication
+            QApplication.processEvents()
+            
+            # 强制刷新表格
+            table.viewport().update()
+            table.update()
+            table.updateGeometry()
+            table.repaint()
+            
+            # 尝试刷新单元格
+            table.update(table.model().index(found_row, success_col_index))
+            table.update(table.model().index(found_row, failed_col_index))
+            
+            # 触发表格数据变化信号
+            if hasattr(table, 'cellChanged'):
+                table.cellChanged.emit(found_row, success_col_index)
+                table.cellChanged.emit(found_row, failed_col_index)
+            
+            # 确保主窗口也刷新
+            if self.parent:
+                self.parent.update()
+                self.parent.repaint()
+            
+            self.log_message(f"已直接更新账号 {account_id} 的统计数据: 成功 {new_success}, 失败 {new_failed}")
+            
+            # 直接强制修改单元格数据，不依赖Qt信号机制
+            self.direct_set_table_cell(table, found_row, success_col_index, str(new_success), "#67C23A")
+            self.direct_set_table_cell(table, found_row, failed_col_index, str(new_failed), "#F56C6C")
+            
         except Exception as e:
-            self.log_message(f"处理账号完成时出错: {str(e)}")
-    
+            self.log_message(f"更新账号行统计数据出错: {str(e)}")
+            traceback.print_exc()
+            
+    def direct_set_table_cell(self, table, row, col, value, color_code=None):
+        """直接设置表格单元格的值，绕过Qt的信号机制
+        
+        Args:
+            table: QTableWidget对象
+            row: 行索引
+            col: 列索引
+            value: 单元格值
+            color_code: 文本颜色代码，如"#FF0000"为红色
+        """
+        try:
+            # 先检查表格和索引是否有效
+            if not table or row < 0 or col < 0 or row >= table.rowCount() or col >= table.columnCount():
+                return False
+                
+            # 获取现有的单元格项目
+            item = table.item(row, col)
+            
+            # 如果单元格项目不存在，创建一个新的
+            if not item:
+                item = QTableWidgetItem()
+                table.setItem(row, col, item)
+            
+            # 设置单元格文本和对齐方式
+            item.setText(str(value))
+            item.setTextAlignment(Qt.AlignCenter)
+            
+            # 如果指定了颜色，设置文本颜色
+            if color_code:
+                item.setForeground(QBrush(QColor(color_code)))
+            
+            # 更新单元格
+            table.viewport().update()
+            
+            # 直接处理事件
+            QApplication.processEvents()
+            
+            return True
+        except Exception as e:
+            self.log_message(f"直接设置表格单元格时出错: {str(e)}")
+            return False
+            
     def update_task_stats(self):
         """更新任务统计信息"""
         if not self.upload_processor:
@@ -970,90 +1232,6 @@ class UploadController:
             
             pending_count = total_queue + total_active
             
-            # 获取账号级别的统计数据
-            account_stats = {}
-            
-            # 直接从UploadProcessor的结果队列中获取任务状态
-            if hasattr(self.upload_processor, 'queue_manager') and hasattr(self.upload_processor.queue_manager, 'task_map'):
-                with self.upload_processor.queue_manager.account_lock:
-                    # 初始化所有账号的统计数据
-                    for task_id, task in self.upload_processor.queue_manager.task_map.items():
-                        appid = task.appid
-                        if appid not in account_stats:
-                            account_stats[appid] = {'success': 0, 'failed': 0}
-                        
-                        # 这里需要处理任务状态名称的匹配问题
-                        # 任务状态可能是VideoTask的常量，也可能是字符串形式
-                        if task.status == VideoTask.STATUS_COMPLETED or task.status == 'completed':
-                            account_stats[appid]['success'] += 1
-                        elif (task.status in [VideoTask.STATUS_FAILED, VideoTask.STATUS_UPLOAD_FAILED, 
-                                            VideoTask.STATUS_PROCESS_FAILED, VideoTask.STATUS_PUBLISH_FAILED] or
-                              task.status in ['failed', 'upload_failed', 'process_failed', 'publish_failed']):
-                            account_stats[appid]['failed'] += 1
-            
-            self.log_message(f"当前任务统计数据: {account_stats}")
-            
-            # 获取表格对象和列索引
-            if hasattr(self.account_manager, 'ui') and hasattr(self.account_manager.ui, 'accountTable'):
-                table = self.account_manager.ui.accountTable
-                
-                # 获取列数并确保有当前成功和当前失败列
-                success_col_index = -1
-                failed_col_index = -1
-                
-                # 查找列标题
-                if table.columnCount() >= 10:
-                    for col in range(table.columnCount()):
-                        header_item = table.horizontalHeaderItem(col)
-                        if header_item:
-                            header_text = header_item.text()
-                            if "当前成功" in header_text:
-                                success_col_index = col
-                            elif "当前失败" in header_text:
-                                failed_col_index = col
-                
-                # 如果没有找到列标题，使用默认索引
-                if success_col_index == -1:
-                    success_col_index = 10  # 默认当前成功列索引
-                if failed_col_index == -1:
-                    failed_col_index = 11  # 默认当前失败列索引
-                
-                self.log_message(f"使用列索引 - 成功: {success_col_index}, 失败: {failed_col_index}")
-                
-                # 确保列索引有效
-                if success_col_index >= 0 and failed_col_index >= 0 and success_col_index < table.columnCount() and failed_col_index < table.columnCount():
-                    # 更新每个账号的统计数据
-                    for row in range(table.rowCount()):
-                        # 获取当前行的账号ID - 索引为1，因为第一列是序号，第二列(索引1)是账号ID
-                        account_id_item = table.item(row, 1) 
-                        if account_id_item:
-                            account_id = account_id_item.text()
-                            
-                            # 获取账号的统计数据
-                            account_success = 0
-                            account_failed = 0
-                            
-                            if account_id in account_stats:
-                                account_success = account_stats[account_id]['success']
-                                account_failed = account_stats[account_id]['failed']
-                            
-                            # 设置当前成功数
-                            success_item = QTableWidgetItem(str(account_success))
-                            success_item.setForeground(QBrush(QColor("#67C23A")))  # 绿色
-                            table.setItem(row, success_col_index, success_item)
-                            
-                            # 设置当前失败数
-                            failed_item = QTableWidgetItem(str(account_failed))
-                            failed_item.setForeground(QBrush(QColor("#F56C6C")))  # 红色
-                            table.setItem(row, failed_col_index, failed_item)
-                
-                    # 强制刷新表格显示
-                    table.viewport().update()
-                    table.update()
-                
-                else:
-                    self.log_message(f"列索引无效: 成功({success_col_index}), 失败({failed_col_index}), 总列数({table.columnCount()})")
-            
             # 更新状态栏显示
             status_text = f"上传统计: 成功 {total_success}, 失败 {total_failed}, 待处理 {pending_count}"
             if hasattr(self.upload_ui, 'set_status_message') and callable(self.upload_ui.set_status_message):
@@ -1073,16 +1251,194 @@ class UploadController:
                 if hasattr(self.upload_ui, 'set_upload_in_progress'):
                     self.upload_ui.set_upload_in_progress(False)
                 
-                # 在完成时强制刷新表格以确保显示最终状态
-                if hasattr(self.account_manager, 'ui') and hasattr(self.account_manager.ui, 'accountTable'):
-                    self.account_manager.ui.accountTable.update()
-                    
                 if hasattr(self, 'stats_timer') and self.stats_timer.isActive():
                     self.stats_timer.stop()
                 
         except Exception as e:
             self.log_message(f"更新任务统计时出错: {str(e)}")
             traceback.print_exc()
+    
+    def manual_refresh_stats(self):
+        """手动刷新统计数据按钮的回调函数"""
+        try:
+            self.log_message("手动刷新统计数据...")
+            
+            # 避免循环调用，不再调用update_task_stats
+            # self.update_task_stats()
+            
+            # 获取账号表格
+            if not hasattr(self.account_manager, 'ui') or not hasattr(self.account_manager.ui, 'accountTable'):
+                self.log_message("无法获取账号表格实例")
+                return
+                
+            table = self.account_manager.ui.accountTable
+            if not table:
+                self.log_message("账号表格对象为空")
+                return
+                
+            # 直接按行更新表格
+            if hasattr(self.upload_processor, 'queue_manager'):
+                # 获取账号统计数据
+                account_stats = {}
+                
+                with self.upload_processor.queue_manager.account_lock:
+                    for task_id, task in self.upload_processor.queue_manager.task_map.items():
+                        appid = task.appid
+                        if not appid:
+                            continue
+                            
+                        # 确保appid是字符串类型
+                        appid = str(appid).strip()
+                        
+                        if appid not in account_stats:
+                            account_stats[appid] = {'success': 0, 'failed': 0}
+                        
+                        # 处理任务状态
+                        if task.status == VideoTask.STATUS_COMPLETED or task.status == 'completed':
+                            account_stats[appid]['success'] += 1
+                        elif (task.status in [VideoTask.STATUS_FAILED, VideoTask.STATUS_UPLOAD_FAILED, 
+                                            VideoTask.STATUS_PROCESS_FAILED, VideoTask.STATUS_PUBLISH_FAILED] or
+                              task.status in ['failed', 'upload_failed', 'process_failed', 'publish_failed']):
+                            account_stats[appid]['failed'] += 1
+                
+                # 更新表格数据
+                for row in range(table.rowCount()):
+                    # 获取账号ID
+                    account_id_item = table.item(row, 2)  # 第3列是账号ID
+                    if not account_id_item:
+                        continue
+                        
+                    account_id = account_id_item.text().strip()
+                    if not account_id:
+                        continue
+                        
+                    # 找到成功和失败列索引
+                    success_col = -1
+                    failed_col = -1
+                    
+                    for col in range(table.columnCount()):
+                        header = table.horizontalHeaderItem(col)
+                        if header:
+                            header_text = header.text()
+                            if "当前成功" in header_text:
+                                success_col = col
+                            elif "当前失败" in header_text:
+                                failed_col = col
+                    
+                    if success_col == -1 or failed_col == -1:
+                        success_col = 10  # 默认值
+                        failed_col = 11   # 默认值
+                    
+                    # 设置统计数据
+                    success_count = 0
+                    failed_count = 0
+                    
+                    if account_id in account_stats:
+                        success_count = account_stats[account_id]['success']
+                        failed_count = account_stats[account_id]['failed']
+                    
+                    # 直接设置单元格值
+                    self.direct_set_table_cell(table, row, success_col, str(success_count), "#67C23A")
+                    self.direct_set_table_cell(table, row, failed_col, str(failed_count), "#F56C6C")
+            
+            # 强制刷新表格
+            table.viewport().update()
+            table.update()
+            table.updateGeometry()
+            table.repaint()
+            
+            # 确保主窗口也刷新
+            if self.parent:
+                self.parent.update()
+                self.parent.repaint()
+                
+            self.log_message("统计数据手动刷新完成")
+            
+        except Exception as e:
+            self.log_message(f"手动刷新统计数据时出错: {str(e)}")
+            traceback.print_exc()
+
+    def on_upload_success(self, trace_id, file_path, video_url):
+        """处理上传成功信号
+        
+        Args:
+            trace_id: 追踪ID
+            file_path: 文件路径
+            video_url: 视频URL
+        """
+        try:
+            # 日志记录
+            self.log_message(f"上传成功 - 文件: {os.path.basename(file_path)}, URL: {video_url}")
+            
+            # 将进度条设置为100%并显示"已完成"
+            self.update_upload_progress(trace_id, file_path, 100, "已完成")
+            
+            # 获取任务状态，只有状态为completed时才增加成功计数
+            if self.upload_processor and trace_id in self.upload_processor.queue_manager.task_map:
+                task = self.upload_processor.queue_manager.task_map[trace_id]
+                if task:
+                    # 确保appid是字符串类型
+                    appid = str(task.appid).strip() if task.appid else ""
+                    
+                    # 检查任务状态，只有真正完成才算成功
+                    if task.status == VideoTask.STATUS_COMPLETED or task.status == 'completed':
+                        # 增加成功计数 - 直接++
+                        self.update_account_row_stats(appid, success_count=1)
+                        self.log_message(f"任务 {trace_id} 完成状态为 {task.status}，已增加成功计数")
+                    else:
+                        # 记录当前状态但不更新计数
+                        self.log_message(f"任务 {trace_id} 上传成功，当前状态为 {task.status}，等待最终发布完成")
+            
+        except Exception as e:
+            self.log_message(f"处理上传成功信号时出错: {str(e)}")
+            traceback.print_exc()
+    
+    def on_upload_failed(self, trace_id, file_path, error):
+        """处理上传失败信号
+        
+        Args:
+            trace_id: 追踪ID
+            file_path: 文件路径
+            error: 错误信息
+        """
+        try:
+            # 日志记录
+            file_name = os.path.basename(file_path)
+            self.log_message(f"上传失败 - 文件: {file_name}, 错误: {error}")
+            
+            # 设置进度条为失败状态
+            self.update_upload_progress(trace_id, file_path, 0, f"失败: {error}")
+            
+            # 直接增加失败计数
+            if self.upload_processor and trace_id in self.upload_processor.queue_manager.task_map:
+                task = self.upload_processor.queue_manager.task_map[trace_id]
+                if task:
+                    # 确保appid是字符串类型
+                    appid = str(task.appid).strip() if task.appid else ""
+                    
+                    # 增加失败计数 - 直接++
+                    self.update_account_row_stats(appid, failed_count=1)
+                    self.log_message(f"任务 {trace_id} 失败状态为 {task.status}，已增加失败计数")
+            
+        except Exception as e:
+            self.log_message(f"处理上传失败信号时出错: {str(e)}")
+            traceback.print_exc()
+    
+    def on_account_finished(self, account_id):
+        """账号任务完成回调
+        
+        Args:
+            account_id: 账号ID
+        """
+        try:
+            self.log_message(f"账号 {account_id} 的任务已全部完成")
+            
+            # 更新UI
+            if hasattr(self.upload_ui, 'update_account_finished'):
+                self.upload_ui.update_account_finished(account_id)
+                
+        except Exception as e:
+            self.log_message(f"处理账号完成时出错: {str(e)}")
     
     def test_batch_set_upload_count(self):
         """测试批量设置上传数量功能

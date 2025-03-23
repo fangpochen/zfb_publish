@@ -748,8 +748,6 @@ class ApiClient:
                         files=part_files,
                         timeout=(30, 120)
                     )
-                    
-                    self.log_message(f"分块 {part_num} 上传完成，大小: {len(part_data)}")
                     return part_response.json()
                 except Exception as e:
                     self.log_message(f"分块 {part_num} 上传失败: {str(e)}")
@@ -986,7 +984,6 @@ class ApiClient:
                 try:
                     # 发送请求
                     url = f'https://mmtcapi.alipay.com/video/2.0/convert/query?fileId={file_id}&mt={mt}&bizKey=content_lifetab'
-                    self.log_message(f"正在获取视频URL，尝试 {attempt + 1}/{max_retries}: {url}")
                     
                     response = requests.get(url, headers=headers)
                     
@@ -1001,7 +998,6 @@ class ApiClient:
                             self.log_message(f"成功获取视频URL: {video_url}")
                             return video_url
                         
-                        self.log_message(f"未获取到视频URL，将在{retry_interval}秒后重试。响应: {response.text}")
                         time.sleep(retry_interval)
                     
                     except Exception as e:
@@ -1175,11 +1171,8 @@ class ApiClient:
             
             # 只有当 scheduleTime 有值时才添加到 json_data
             if scheduleTime:
+                self.log_message(f"使用定时发布时间: {scheduleTime}")
                 json_data['scheduleTime'] = self.format_time_string(scheduleTime)
-            
-            # 打印最终的话题信息和完整的json数据
-            self.log_message(f"最终话题信息: {json_data['topicInfoVOList']}")
-            self.log_message(f"发布请求完整数据: {json.dumps(json_data, ensure_ascii=False, indent=2)}")
             
             # 发送请求
             response = requests.post(
@@ -1192,7 +1185,6 @@ class ApiClient:
             
             # 解析响应数据
             response_data = json.loads(response.text)
-            self.log_message(f'发布响应: {response.text}')
             
             # 检查发布状态
             if response_data.get('stat') == 'failed':
@@ -1209,43 +1201,30 @@ class ApiClient:
             raise  # 重新抛出异常，与zfb.py保持一致
             
     def format_time_string(self, time_str):
-        """格式化时间字符串为API需要的格式
+        """格式化时间字符串为 YYYY-MM-DD HH:MM 格式
         
         Args:
-            time_str: 时间字符串
+            time_str: 时间字符串，格式为 YYYY-MM-DD HH:MM
             
         Returns:
             str: 格式化后的时间字符串
         """
         try:
-            # 如果是datetime对象，直接格式化
-            if isinstance(time_str, datetime.datetime):
-                return time_str.strftime('%Y-%m-%d %H:%M:%S')
-                
-            # 如果是字符串，先解析再格式化
-            if isinstance(time_str, str):
-                # 尝试不同的格式解析
-                formats = [
-                    '%Y-%m-%d %H:%M:%S',
-                    '%Y/%m/%d %H:%M:%S',
-                    '%Y年%m月%d日 %H:%M:%S',
-                    '%Y-%m-%d %H:%M',
-                    '%Y/%m/%d %H:%M',
-                    '%Y年%m月%d日 %H:%M'
-                ]
-                
-                for fmt in formats:
-                    try:
-                        dt = datetime.datetime.strptime(time_str, fmt)
-                        return dt.strftime('%Y-%m-%d %H:%M:%S')
-                    except ValueError:
-                        continue
-                        
-            # 如果解析失败，返回原始字符串
-            return time_str
+            # 导入datetime模块的datetime类
+            from datetime import datetime
             
+            # 解析时间字符串
+            dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M')
+            
+            # 重新格式化，确保小时是两位数
+            formatted_time = dt.strftime('%Y-%m-%d %H:%M')
+            
+            self.log_message(f"时间格式化成功: {time_str} -> {formatted_time}")
+            
+            return formatted_time
         except Exception as e:
-            self.log_message(f"格式化时间字符串出错: {str(e)}")
+            self.log_message(f"时间格式化出错: {str(e)}")
+            # 如果格式化失败，返回原始字符串
             return time_str
     
     def search_topics(self, cookies, appid, keywords):
@@ -1294,8 +1273,6 @@ class ApiClient:
                 'sourceId': 'S',
             }
             
-            self.log_message(f"搜索话题请求参数: {json_data}")
-            
             # 发送请求
             response = requests.post(
                 'https://fuwu.alipay.com/platform/queryTopicRecommend.json',
@@ -1304,10 +1281,7 @@ class ApiClient:
                 headers=headers,
                 json=json_data,
                 timeout=15
-            )
-            
-            self.log_message(f"搜索话题响应状态码: {response.status_code}")
-            
+            ) 
             if response.status_code == 200:
                 data = response.json()
                 if data.get("stat") == "ok":
@@ -1329,7 +1303,6 @@ class ApiClient:
                                 'display': f"#{topic_name}#"  # 添加#前缀和后缀
                             })
                     
-                    self.log_message(f"成功找到 {len(formatted_topics)} 个话题")
                     return formatted_topics
                 else:
                     error_msg = data.get("errorMessage", "未知错误")
