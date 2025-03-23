@@ -643,44 +643,48 @@ class DatabaseManager:
             return False
 
     def add_folder(self, appid, folder_path, max_uploads, total_files):
-        """添加文件夹到数据库
+        """添加或更新文件夹配置
         
         Args:
             appid (str): 账号ID
             folder_path (str): 文件夹路径
-            max_uploads (int): 最大上传数量
+            max_uploads (int): 最大上传数量,从界面获取
             total_files (int): 文件夹中的总文件数
             
         Returns:
-            bool: 是否添加成功
+            bool: 是否添加/更新成功
         """
         try:
-            # 检查文件夹是否已存在
             conn = self.get_connection()
             cursor = conn.cursor()
             
+            # 检查文件夹是否已存在
             cursor.execute('''
                 SELECT id FROM folder_settings 
-                WHERE appid=? AND folder_path=?
-            ''', (appid, folder_path))
+                WHERE appid=?
+            ''', (appid,))
             existing = cursor.fetchone()
             
             if existing:
-                print(f"文件夹已存在: {folder_path}")
-                return False
-            
-            # 插入新文件夹
-            cursor.execute('''
-                INSERT INTO folder_settings 
-                (appid, folder_path, total_files, max_uploads, uploaded_count, status)
-                VALUES (?, ?, ?, ?, 0, '待上传')
-            ''', (appid, folder_path, total_files, max_uploads))
+                # 更新已存在的配置
+                cursor.execute('''
+                    UPDATE folder_settings 
+                    SET folder_path=?, total_files=?, max_uploads=?, uploaded_count=0, status='待上传'
+                    WHERE appid=?
+                ''', (folder_path, total_files, max_uploads, appid))
+            else:
+                # 插入新配置
+                cursor.execute('''
+                    INSERT INTO folder_settings 
+                    (appid, folder_path, total_files, max_uploads, uploaded_count, status)
+                    VALUES (?, ?, ?, ?, 0, '待上传')
+                ''', (appid, folder_path, total_files, max_uploads))
             
             conn.commit()
             conn.close()
             return True
         except Exception as e:
-            print(f"添加文件夹失败: {str(e)}")
+            print(f"添加/更新文件夹配置失败: {str(e)}")
             conn.rollback()
             return False
 

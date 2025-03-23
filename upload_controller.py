@@ -247,12 +247,18 @@ class UploadController:
             art_text_settings = settings.get('art_text', {})
             art_text_info = ""
             if art_text_settings and art_text_settings.get('enabled', False):
-                art_text_info = f"\n艺术字: \"{art_text_settings.get('text', '')}\" (样式: {art_text_settings.get('style', '标准')}, 颜色: {art_text_settings.get('color', '白色')})"
+                if art_text_settings.get('use_filename_if_empty', False):
+                    art_text_info = f"\n艺术字: 将使用视频文件名 (样式: {art_text_settings.get('style', '标准')}, 颜色: {art_text_settings.get('color', '白色')})"
+                else:
+                    art_text_info = f"\n艺术字: \"{art_text_settings.get('text', '')}\" (样式: {art_text_settings.get('style', '标准')}, 颜色: {art_text_settings.get('color', '白色')})"
+            
+            # 获取全局上传数量限制
+            max_uploads_per_account = settings.get('max_uploads', 10)
             
             reply = QMessageBox.question(
                 self.parent, 
                 "确认上传", 
-                f"将为{account_count}个账号上传视频，每个账号最多上传{settings.get('max_uploads', 10)}个视频。\n"
+                f"将为{account_count}个账号上传视频，每个账号最多上传{max_uploads_per_account}个视频。\n"
                 f"{cover_info}{art_text_info}\n"
                 f"是否继续？",
                 QMessageBox.Yes | QMessageBox.No, 
@@ -266,21 +272,21 @@ class UploadController:
             try:
                 topics = self.get_topics()
                 
+                # 允许不设置话题
                 if not topics:
-                    QMessageBox.warning(self.parent, "上传提示", "未设置话题，请先搜索并选择话题")
-                    return
+                    self.log_message("未设置话题，将使用空话题列表上传")
                 
                 # 打印话题信息进行调试
-                if isinstance(topics, dict) and 'topicInfoVOList' in topics:
+                if topics and isinstance(topics, dict) and 'topicInfoVOList' in topics:
                     topic_count = len(topics['topicInfoVOList'])
                     topic_names = [t.get('topicName', '') for t in topics['topicInfoVOList']]
                     self.log_message(f"上传将使用 {topic_count} 个话题: {topic_names}")
-                else:
+                elif topics:
                     self.log_message(f"上传将使用话题: {topics}")
                 
             except Exception as e:
                 # 话题验证失败，显示友好的错误提示
-                QMessageBox.warning(self.parent, "上传提示", f"话题数据验证失败: {str(e)}\n请先搜索并选择有效的话题")
+                QMessageBox.warning(self.parent, "上传提示", f"话题数据验证失败: {str(e)}\n请先搜索并选择有效的话题，或者清空话题内容")
                 self.log_message(f"话题验证失败: {str(e)}")
                 return
             
@@ -291,6 +297,10 @@ class UploadController:
             
             # 添加任务
             self.tasks = []
+            
+            # 账号级别的上传计数器
+            account_upload_counts = {}
+            
             for account_info in account_folders:
                 account = account_info.get('account')
                 folders = account_info.get('folders', [])
@@ -298,9 +308,24 @@ class UploadController:
                 if not account or not folders:
                     continue
                 
+                # 获取账号ID
+                appid = account.get('appid')
+                if not appid:
+                    continue
+                    
+                # 确保appid是字符串类型
+                appid = str(appid).strip()
+                
+                # 初始化该账号的上传计数
+                if appid not in account_upload_counts:
+                    account_upload_counts[appid] = 0
+                
+                # 为每个账号准备视频文件列表
+                all_video_files = []
+                
+                # 先收集所有文件夹中的视频
                 for folder in folders:
                     folder_path = folder.get('path')
-                    limit = folder.get('limit', settings.get('max_uploads', 10))
                     
                     # 检查folder_path是否为字典类型，并提取实际路径
                     if isinstance(folder_path, dict):
@@ -312,33 +337,57 @@ class UploadController:
                         continue
                     
                     # 获取文件夹中的视频文件
-                    video_files = []
                     for file_name in os.listdir(folder_path):
                         if file_name.lower().endswith(('.mp4', '.mov', '.avi')):
-                            video_files.append(os.path.join(folder_path, file_name))
+                            video_files = os.path.join(folder_path, file_name)
+                            all_video_files.append(video_files)
+                
+                # 限制此账号的总上传数量
+                all_video_files = all_video_files[:max_uploads_per_account]
+                self.log_message(f"账号 {appid} 将上传 {len(all_video_files)} 个视频，最大限制为 {max_uploads_per_account}")
+                
+                # 添加任务
+                for video_file in all_video_files:
+                    # 检查是否已达到账号上传限制
+                    if account_upload_counts[appid] >= max_uploads_per_account:
+                        self.log_message(f"账号 {appid} 已达到最大上传数量限制 {max_uploads_per_account}")
+                        break
                     
-                    # 限制上传数量
-                    video_files = video_files[:limit]
+                    # 检查艺术字设置，如果文本为空，则使用文件名
+                    if (art_text_settings and art_text_settings.get('enabled') and 
+                        art_text_settings.get('use_filename_if_empty', False)):
+                        # 创建新的艺术字设置副本，避免修改原设置
+                        file_art_text_settings = dict(art_text_settings)
+                        # 使用不带扩展名的文件名作为艺术字文本
+                        file_basename = os.path.basename(video_file)
+                        file_name_without_ext = os.path.splitext(file_basename)[0]
+                        file_art_text_settings['text'] = file_name_without_ext
+                        self.log_message(f"使用文件名 '{file_name_without_ext}' 作为艺术字文本")
+                    else:
+                        file_art_text_settings = art_text_settings
                     
-                    # 添加任务
-                    for video_file in video_files:
-                        task = self.upload_processor.add_task(
-                            account=account,
-                            file_path=video_file,
-                            cover_path=settings.get('cover_path'),
-                            use_random_cover=settings.get('use_random_cover', True),
-                            topics=topics,
-                            schedule_time=settings.get('schedule_time'),
-                            art_text_settings=settings.get('art_text')
-                        )
-                        
-                        if task:
-                            self.tasks.append(task)
-                            self.log_message(f"添加上传任务: {task.trace_id} - {os.path.basename(video_file)}")
+                    task = self.upload_processor.add_task(
+                        account=account,
+                        file_path=video_file,
+                        cover_path=settings.get('cover_path'),
+                        use_random_cover=settings.get('use_random_cover', True),
+                        topics=topics,
+                        schedule_time=settings.get('schedule_time'),
+                        art_text_settings=file_art_text_settings
+                    )
+                    
+                    if task:
+                        self.tasks.append(task)
+                        account_upload_counts[appid] += 1
+                        self.log_message(f"添加上传任务: {task.trace_id} - {os.path.basename(video_file)}，账号 {appid} 当前任务数: {account_upload_counts[appid]}")
             
             if self.tasks:
                 self.upload_ui.set_upload_in_progress(True)
                 self.log_message(f"开始上传 {len(self.tasks)} 个视频")
+                
+                # 输出每个账号的上传数量
+                for appid, count in account_upload_counts.items():
+                    self.log_message(f"账号 {appid} 上传任务数: {count}")
                 
                 # 上传开始后强制刷新一次表格
                 QTimer.singleShot(1000, self.force_update_stats)
@@ -496,7 +545,6 @@ class UploadController:
                 # 这种情况下没有话题ID，需要提示用户执行搜索
                 raise Exception("找不到话题ID信息，请先点击'搜索'按钮搜索并选择话题")
         
-        raise Exception("未设置任何话题，请先搜索并选择话题")
     
     def set_topics(self, topics):
         """设置话题到UI
@@ -926,30 +974,73 @@ class UploadController:
                 # 更新数据库
                 success_count = 0
                 updated_appids = []
+                processed_folder_ids = set()  # 用于记录已处理的文件夹ID，避免重复处理
+                
                 for account_info in account_folders:
                     account = account_info.get('account')
                     if not account:
                         continue
                         
                     appid = account.get('appid')
+                    if not appid:
+                        self.log_message(f"跳过无appid的账号")
+                        continue
+                        
+                    # 确保appid是字符串类型
+                    appid = str(appid).strip()
                     updated_appids.append(appid)
+                    
+                    self.log_message(f"处理账号 {appid} 的文件夹设置")
                     
                     # 获取账号的所有文件夹设置
                     if hasattr(self.db, 'get_folder_settings'):
                         folder_settings = self.db.get_folder_settings(appid)
+                        
+                        # 如果没有文件夹设置，尝试创建一个默认设置
+                        if not folder_settings and hasattr(self.db, 'add_folder_settings'):
+                            try:
+                                # 获取账号信息
+                                account_info = self.account_manager.get_account_by_id(appid)
+                                if account_info:
+                                    folder_path = account_info.get('folder_path', '')
+                                    if folder_path:
+                                        # 添加默认文件夹设置
+                                        folder_id = self.db.add_folder_settings(appid, folder_path, new_limit)
+                                        if folder_id:
+                                            self.log_message(f"为账号 {appid} 创建新的文件夹设置，ID: {folder_id}，路径: {folder_path}，限制: {new_limit}")
+                                            success_count += 1
+                            except Exception as e:
+                                self.log_message(f"为账号 {appid} 创建默认文件夹设置时出错: {str(e)}")
+                                
+                        # 更新现有的文件夹设置
                         for folder in folder_settings:
                             folder_id = folder.get('id')
+                            
+                            # 检查是否已处理过该文件夹
+                            if folder_id in processed_folder_ids:
+                                self.log_message(f"跳过已处理的文件夹ID {folder_id}")
+                                continue
+                                
+                            processed_folder_ids.add(folder_id)  # 标记为已处理
+                            
+                            # 获取当前限制
+                            current_limit = folder.get('max_uploads')
+                            
                             # 更新文件夹上传限制
                             if hasattr(self.db, 'update_folder_limit'):
-                                if self.db.update_folder_limit(folder_id, new_limit):
-                                    success_count += 1
-                                    self.log_message(f"已更新文件夹ID {folder_id} 的上传数量限制为 {new_limit}")
-                                else:
-                                    self.log_message(f"更新文件夹ID {folder_id} 的上传限制失败")
+                                try:
+                                    if self.db.update_folder_limit(folder_id, new_limit):
+                                        success_count += 1
+                                        self.log_message(f"已更新文件夹ID {folder_id} 的上传数量限制: {current_limit} -> {new_limit}")
+                                    else:
+                                        self.log_message(f"更新文件夹ID {folder_id} 的上传限制失败")
+                                except Exception as e:
+                                    self.log_message(f"更新文件夹ID {folder_id} 时发生错误: {str(e)}")
                             else:
                                 self.log_message("数据库管理器缺少update_folder_limit方法")
                 
                 self.log_message(f"已为 {success_count} 个文件夹设置最大上传数量: {new_limit}")
+                self.log_message(f"处理的账号: {', '.join(updated_appids)}")
                 
                 # 重新加载账号数据以刷新表格显示
                 if hasattr(self.account_manager, 'load_accounts'):

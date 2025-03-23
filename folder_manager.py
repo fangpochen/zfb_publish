@@ -112,63 +112,49 @@ class FolderManager:
     def add_folder(self):
         """向当前选中的账号添加视频文件夹"""
         try:
+            # 确保UI中有accountTableWidget组件
+            if not hasattr(self.ui, 'accountTableWidget'):
+                self.log("UI中缺少accountTableWidget组件")
+                return
+                
             # 检查是否有选中的账号
-            selected_rows = []
+            selected_row = self.ui.accountTableWidget.currentRow()
+            if selected_row < 0:
+                QMessageBox.warning(self.parent, "提示", "请先选择一个账号")
+                return
+                
+            # 获取账号ID
+            appid = self.ui.accountTableWidget.item(selected_row, 0).text()
             
-            # 确保UI中有accountTable组件
-            if not hasattr(self.ui, 'accountTable'):
-                self.log("UI中缺少accountTable组件")
-                return
-                
-            for row in range(self.ui.accountTable.rowCount()):
-                checkbox = self.ui.accountTable.cellWidget(row, 0)
-                if checkbox and checkbox.isChecked():
-                    selected_rows.append(row)
+            # 选择文件夹
+            folder_path = QFileDialog.getExistingDirectory(
+                self.parent, "选择视频文件夹"
+            )
             
-            if not selected_rows:
-                QMessageBox.warning(self.parent, "提示", "请先选择一个账号444")
-                return
-                
-            if len(selected_rows) > 1:
-                QMessageBox.warning(self.parent, "提示", "请只选择一个账号添加文件夹")
-                return
-                
-            # 获取选中账号的ID
-            row = selected_rows[0]
-            appid = self.ui.accountTable.item(row, 2).text()
-            if not appid:
-                QMessageBox.warning(self.parent, "提示", "获取账号ID失败")
-                return
-                
-            # 打开文件夹选择对话框
-            folder_path = QFileDialog.getExistingDirectory(self.parent, "选择视频文件夹")
             if not folder_path:
                 return  # 用户取消选择
                 
-            # 统计文件夹中的视频文件数量
-            video_extensions = ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv']
-            video_files = []
-            
-            for ext in video_extensions:
-                video_files.extend(glob.glob(os.path.join(folder_path, f'*{ext}')))
+            # 检查文件夹是否存在
+            if not os.path.exists(folder_path):
+                QMessageBox.warning(self.parent, "错误", f"文件夹不存在: {folder_path}")
+                return
                 
-            total_files = len(video_files)
+            # 统计视频文件数量
+            total_files = 0
+            for file_name in os.listdir(folder_path):
+                if file_name.lower().endswith(('.mp4', '.mov', '.avi')):
+                    total_files += 1
+                    
             if total_files == 0:
                 QMessageBox.warning(self.parent, "提示", f"所选文件夹中没有视频文件")
                 return
                 
-            # 设置上传限制
-            max_uploads, ok = QInputDialog.getInt(
-                self.parent, "设置上传限制", 
-                f"文件夹中共有 {total_files} 个视频文件，\n请设置最大上传数量（0表示全部）:",
-                min=0, max=total_files, value=min(50, total_files)
-            )
-            
-            if not ok:
-                return  # 用户取消设置
-                
-            if max_uploads == 0:
-                max_uploads = total_files  # 0表示全部上传
+            # 获取界面上设置的上传数量
+            if hasattr(self.parent, 'upload_ui') and hasattr(self.parent.upload_ui, 'upload_count_input'):
+                max_uploads = self.parent.upload_ui.upload_count_input.value()
+            else:
+                # 如果找不到界面设置,使用默认值
+                max_uploads = min(50, total_files)
                 
             # 确保数据库有add_folder方法
             if not hasattr(self.db, 'add_folder'):

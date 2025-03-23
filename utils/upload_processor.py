@@ -916,127 +916,263 @@ class UploadProcessor:
             return None
     
     def _create_art_text_cover(self, task, cover_path=None):
-        """创建带艺术字的封面图片
+        """创建带艺术字的封面图片 - 使用Qt绘图
+        
+        使用PyQt5的绘图功能添加艺术字，支持自定义字体
         
         Args:
             task: VideoTask对象
             cover_path: 封面图片路径，如果为None则使用task.cover_path
             
         Returns:
-            str: 创建的封面图片路径，失败则返回None
+            str: 创建的封面图片路径，失败则返回原始封面路径
         """
+        self.logger.info(f"开始创建艺术字封面 (Qt绘图模式)")
+        
+        # 导入所需模块
+        import os
+        import tempfile
+        import shutil
+        import sys
+        import traceback
+        
         try:
-            from PIL import Image, ImageDraw, ImageFont
-            import tempfile
-            import os.path
+            from PyQt5.QtWidgets import QApplication
+            from PyQt5.QtGui import QImage, QPainter, QFont, QColor, QPixmap, QPen, QFontDatabase
+            from PyQt5.QtCore import Qt, QRect
+        except ImportError as e:
+            self.logger.error(f"导入PyQt5绘图模块失败: {str(e)}")
+            return cover_path
+        
+        # 使用提供的封面路径或任务中的封面路径
+        image_path = cover_path or task.cover_path
+        if not image_path or not os.path.exists(image_path):
+            self.logger.warning(f"封面图片不存在，无法添加艺术字: {image_path}")
+            return None
             
-            # 使用提供的封面路径或任务中的封面路径
-            image_path = cover_path or task.cover_path
-            if not image_path or not os.path.exists(image_path):
-                self.logger.warning(f"封面图片不存在，无法添加艺术字: {image_path}")
-                return None
-                
-            # 检查设置是否有效
-            if not task.art_text_settings or not task.art_text_settings.get("text"):
-                self.logger.warning(f"艺术字设置无效，使用原始封面: {task.trace_id}")
-                return image_path
-                
-            # 获取设置
-            text = task.art_text_settings.get("text", "")
-            style = task.art_text_settings.get("style", "标准")
-            font_size = task.art_text_settings.get("font_size", 36)
-            color_name = task.art_text_settings.get("color", "白色")
-            position = task.art_text_settings.get("position", "底部居中")
-            
-            # 颜色映射
-            color_map = {
-                "白色": (255, 255, 255),
-                "黑色": (0, 0, 0),
-                "红色": (255, 0, 0),
-                "蓝色": (0, 0, 255),
-                "绿色": (0, 255, 0),
-                "黄色": (255, 255, 0),
-                "粉色": (255, 192, 203),
-                "紫色": (128, 0, 128),
-                "橙色": (255, 165, 0)
-            }
-            text_color = color_map.get(color_name, (255, 255, 255))
-            
-            # 打开原始图像
-            image = Image.open(image_path)
-            draw = ImageDraw.Draw(image)
-            
-            # 字体映射
-            font_map = {
-                "标准": "arial.ttf",
-                "艺术风格一": "arialbd.ttf",  # 加粗Arial
-                "艺术风格二": "timesi.ttf",   # 斜体Times
-                "霓虹灯": "impact.ttf",      # Impact
-                "复古": "georgia.ttf",       # Georgia
-                "水墨风": "simkai.ttf",      # 楷体
-                "书法": "simli.ttf",         # 隶书
-                "华丽花体": "stxingka.ttf"   # 行楷
-            }
-            
-            # 尝试加载字体
-            font_file = font_map.get(style, "arial.ttf")
-            try:
-                font = ImageFont.truetype(font_file, font_size)
-            except:
-                # 如果字体加载失败，使用默认字体
-                self.logger.warning(f"无法加载字体 {font_file}，使用默认字体")
-                font = ImageFont.load_default()
-            
-            # 获取文本尺寸
-            text_width, text_height = draw.textsize(text, font=font)
-            
-            # 图像尺寸
-            img_width, img_height = image.size
-            
-            # 计算文本位置
-            if position == "顶部居中":
-                text_position = ((img_width - text_width) // 2, 10)
-            elif position == "底部居中":
-                text_position = ((img_width - text_width) // 2, img_height - text_height - 10)
-            elif position == "左上":
-                text_position = (10, 10)
-            elif position == "右上":
-                text_position = (img_width - text_width - 10, 10)
-            elif position == "左下":
-                text_position = (10, img_height - text_height - 10)
-            elif position == "右下":
-                text_position = (img_width - text_width - 10, img_height - text_height - 10)
-            elif position == "居中":
-                text_position = ((img_width - text_width) // 2, (img_height - text_height) // 2)
-            else:
-                # 默认底部居中
-                text_position = ((img_width - text_width) // 2, img_height - text_height - 10)
-                
-            # 特殊效果处理
-            if style == "霓虹灯":
-                # 添加发光边缘
-                shadow_color = (*text_color, 128)  # 半透明颜色
-                draw.text((text_position[0]-1, text_position[1]-1), text, font=font, fill=shadow_color)
-                draw.text((text_position[0]+1, text_position[1]-1), text, font=font, fill=shadow_color)
-                draw.text((text_position[0]-1, text_position[1]+1), text, font=font, fill=shadow_color)
-                draw.text((text_position[0]+1, text_position[1]+1), text, font=font, fill=shadow_color)
-            
-            # 绘制文本
-            draw.text(text_position, text, font=font, fill=text_color)
-            
-            # 保存到临时文件
+        # 先复制一份原始封面作为备份
+        try:
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
             temp_file.close()
-            image.save(temp_file.name, quality=95)
-            
-            self.logger.info(f"成功生成带艺术字的封面: {temp_file.name}")
-            return temp_file.name
-            
+            backup_path = temp_file.name
+            shutil.copy2(image_path, backup_path)
+            self.logger.info(f"已复制原始封面到临时文件: {backup_path}")
         except Exception as e:
-            self.logger.error(f"生成艺术字封面时出错: {str(e)}")
+            self.logger.error(f"创建临时文件失败: {str(e)}")
+            return image_path
+        
+        # 如果艺术字设置无效，直接返回原始封面
+        if not task.art_text_settings or not task.art_text_settings.get("text"):
+            self.logger.warning(f"艺术字设置无效，使用原始封面")
+            return image_path
+        
+        # 获取艺术字设置
+        text = task.art_text_settings.get("text", "")
+        style = task.art_text_settings.get("style", "标准")
+        font_size = task.art_text_settings.get("font_size", 36)
+        color_name = task.art_text_settings.get("color", "白色")
+        position = task.art_text_settings.get("position", "底部居中")
+        self.logger.info(f"艺术字设置: 文本='{text}', 风格='{style}', 字体大小={font_size}, 颜色='{color_name}', 位置='{position}'")
+        
+        # 创建临时文件保存渲染结果
+        try:
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+            output_path = temp_file.name
+            temp_file.close()
+        except Exception as e:
+            self.logger.error(f"创建临时文件失败: {str(e)}")
+            return backup_path
+        
+        # 确保QApplication实例存在
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication(sys.argv)
+            self.logger.info("已创建QApplication实例")
+            
+        try:
+            # 颜色映射
+            color_map = {
+                "白色": QColor(255, 255, 255),
+                "黑色": QColor(0, 0, 0),
+                "红色": QColor(255, 0, 0),
+                "蓝色": QColor(0, 0, 255),
+                "绿色": QColor(0, 255, 0),
+                "黄色": QColor(255, 255, 0),
+                "粉色": QColor(255, 192, 203),
+                "紫色": QColor(128, 0, 128),
+                "橙色": QColor(255, 165, 0)
+            }
+            text_color = color_map.get(color_name, QColor(255, 255, 255))
+            
+            # 加载自定义字体
+            font_db = QFontDatabase()
+            custom_fonts = {}
+            
+            # 字体文件路径
+            fonts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fonts")
+            self.logger.info(f"字体目录路径: {fonts_dir}")
+            
+            if os.path.exists(fonts_dir):
+                for font_file in os.listdir(fonts_dir):
+                    if font_file.lower().endswith(('.ttf', '.otf')):
+                        font_path = os.path.join(fonts_dir, font_file)
+                        font_id = font_db.addApplicationFont(font_path)
+                        if font_id != -1:
+                            families = font_db.applicationFontFamilies(font_id)
+                            if families:
+                                font_family = families[0]
+                                # 提取文件名作为字体风格名
+                                style_name = os.path.splitext(font_file)[0]
+                                custom_fonts[style_name] = font_family
+                                self.logger.info(f"已加载自定义字体: {style_name} -> {font_family}")
+            
+            # 字体映射 - 首先尝试使用自定义字体，然后回退到系统字体
+            font_map = {
+                "标准": "Arial",
+                "艺术风格一": "Arial",
+                "艺术风格二": "Times New Roman",
+                "霓虹灯": "Impact",
+                "霓虹灯风格": "Impact",  # 兼容UI中的显示名称
+                "复古": "Georgia",
+                "复古风格": "Georgia",   # 兼容UI中的显示名称
+                "水墨风": "SimKai",      # 楷体
+                "书法": "SimLi",         # 隶书
+                "华丽花体": "STXingkai"  # 行楷
+            }
+            
+            # 更新字体映射，添加自定义字体
+            font_map.update({
+                "子魂扁桃体": custom_fonts.get("ZiHunBianTaoTi-2", "Arial"),
+                "华光钢黑体": custom_fonts.get("HuaGuangGangHeiTi-2", "Arial"),
+                "青鸟华光行楷": custom_fonts.get("QingNiaoHuaGuangXingKai-2", "STXingkai")
+            })
+            
+            # 获取字体名称
+            font_name = font_map.get(style, "Arial")
+            
+            # 加载图片到QImage
+            image = QImage(image_path)
+            if image.isNull():
+                self.logger.error(f"无法加载图片: {image_path}")
+                return backup_path
+            
+            # 获取图片尺寸
+            width = image.width()
+            height = image.height()
+            
+            # 适当调整字体大小 - 根据图片尺寸
+            if width > 1000 or height > 1000:
+                # 对于大图片，适当增大字体
+                adjusted_font_size = int(font_size * 2)
+            else:
+                adjusted_font_size = font_size
+            
+            # 创建绘制器
+            painter = QPainter()
+            painter.begin(image)
+            
+            # 设置抗锯齿
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.TextAntialiasing)
+            
+            # 创建字体
+            font = QFont(font_name, adjusted_font_size)
+            font.setBold(True)  # 加粗提高可读性
+            
+            # 根据风格调整字体
+            if style in ["霓虹灯风格"]:
+                # 霓虹灯风格加粗更多
+                font.setWeight(QFont.ExtraBold)
+            elif style in ["水墨风", "书法", "子魂扁桃体", "华光钢黑体", "青鸟华光行楷"]:
+                # 书法风格不需要特别加粗
+                font.setBold(False)
+            
+            painter.setFont(font)
+            
+            # 测量文本尺寸
+            fm = painter.fontMetrics()
+            try:
+                # Qt5.11+使用horizontalAdvance
+                text_width = fm.horizontalAdvance(text)
+            except AttributeError:
+                # 旧版本使用width
+                text_width = fm.width(text)
+            text_height = fm.height()
+            
+            # 计算背景矩形区域高度
+            bg_height = int(text_height * 1.5)
+            
+            # 确定文本位置和背景区域
+            x, y = 0, 0
+            if position == "顶部居中":
+                x = (width - text_width) // 2
+                y = text_height + 10
+                bg_rect = QRect(0, 0, width, bg_height)
+            elif position == "底部居中":
+                x = (width - text_width) // 2
+                y = height - 10
+                bg_rect = QRect(0, height - bg_height, width, bg_height)
+            elif position == "居中":
+                x = (width - text_width) // 2
+                y = (height + text_height) // 2
+                bg_rect = QRect(0, (height - bg_height) // 2, width, bg_height)
+            else:  # 默认底部居中
+                x = (width - text_width) // 2
+                y = height - 10
+                bg_rect = QRect(0, height - bg_height, width, bg_height)
+            
+            # 绘制半透明背景
+            bg_color = QColor(0, 0, 0, 128)  # 半透明黑色
+            painter.fillRect(bg_rect, bg_color)
+            
+            # 设置文本画笔颜色
+            painter.setPen(text_color)
+            
+            # 如果是霓虹灯样式，添加发光效果
+            if style == "霓虹灯风格":
+                # 添加文字阴影/光晕效果
+                glow_color = QColor(text_color)
+                glow_color.setAlpha(80)  # 降低不透明度
+                
+                # 绘制多个方向的阴影以增强发光效果
+                offsets = [(1, 1), (-1, 1), (1, -1), (-1, -1), (2, 0), (-2, 0), (0, 2), (0, -2)]
+                for offset_x, offset_y in offsets:
+                    painter.setPen(glow_color)
+                    painter.drawText(x + offset_x, y + offset_y, text)
+            
+            # 为部分风格添加描边效果增强可见性
+            if style in ["标准", "艺术风格一", "艺术风格二"]:
+                # 添加黑色描边
+                outline_color = QColor(0, 0, 0)
+                painter.setPen(outline_color)
+                offsets = [(1, 1), (-1, 1), (1, -1), (-1, -1)]
+                for offset_x, offset_y in offsets:
+                    painter.drawText(x + offset_x, y + offset_y, text)
+                
+                # 重置画笔颜色
+                painter.setPen(text_color)
+            
+            # 绘制文本
+            painter.drawText(x, y, text)
+            
+            # 完成绘制
+            painter.end()
+            
+            # 记录字体设置信息
+            self.logger.info(f"文本渲染信息: 文本='{text}', 字体='{font_name}', 大小={adjusted_font_size}, 位置='{position}'")
+            
+            # 保存结果
+            if image.save(output_path, "JPG", 95):
+                self.logger.info(f"成功使用Qt绘制艺术字封面: {output_path}")
+                return output_path
+            else:
+                self.logger.error(f"保存Qt绘制的封面失败!")
+                return backup_path
+                
+        except Exception as e:
+            self.logger.error(f"使用Qt绘制艺术字时出错: {str(e)}")
             traceback.print_exc()
-            # 如果出错，返回原始封面路径
-            return cover_path
+            return backup_path
     
     def _process_worker(self, task):
         """处理工作线程函数
@@ -1188,13 +1324,18 @@ class UploadProcessor:
             task.update_progress('publish', 10)
             self._send_progress_signal(task)
             
-            # 准备话题
+            # 准备话题 - 支持不设置话题
             topics = task.topics
             self.logger.info(f"原始话题数据: {topics}")
             
-            # 使用修改后的format_topic_for_publish方法处理话题
-            formatted_topics = self.api_client.format_topic_for_publish(topics)
-            self.logger.info(f"格式化后的话题数据: {formatted_topics}")
+            # 处理空话题情况
+            formatted_topics = []
+            if topics:
+                # 使用修改后的format_topic_for_publish方法处理话题
+                formatted_topics = self.api_client.format_topic_for_publish(topics)
+                self.logger.info(f"格式化后的话题数据: {formatted_topics}")
+            else:
+                self.logger.info("未设置话题，将使用空话题列表")
             
             # 上传封面图片（如果有）
             cover_id = None
@@ -1234,8 +1375,11 @@ class UploadProcessor:
                 'scheduleTime': task.schedule_time,
                 'title': task.manual_title or os.path.splitext(task.file_name)[0],
                 'cookies': task.cookies,
-                'topics': formatted_topics
             }
+            
+            # 只在有话题时添加话题参数
+            if formatted_topics:
+                publish_params['topics'] = formatted_topics
             
             # 移除不需要的参数
             if cover_id:

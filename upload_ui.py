@@ -237,9 +237,15 @@ class UploadUI(QWidget):
         text_input_layout = QHBoxLayout()
         text_input_layout.addWidget(QLabel("文本内容:"))
         self.art_text_input = QLineEdit()
-        self.art_text_input.setPlaceholderText("输入要添加的艺术字...")
+        self.art_text_input.setPlaceholderText("输入要添加的艺术字...(留空则使用视频文件名)")
         text_input_layout.addWidget(self.art_text_input)
         art_text_layout.addLayout(text_input_layout)
+        
+        # 添加提示标签
+        tip_label = QLabel("提示: 留空将自动使用视频文件名作为艺术字")
+        tip_label.setStyleSheet("color: #888; font-size: 11px;")
+        tip_label.setAlignment(Qt.AlignRight)
+        art_text_layout.addWidget(tip_label)
         
         # 艺术字样式选择
         style_layout = QHBoxLayout()
@@ -419,9 +425,13 @@ class UploadUI(QWidget):
         if not self.use_art_text_checkbox.isChecked():
             return {"enabled": False}
         
+        # 获取用户输入的文本，如果为空则设置标志让上传时使用文件名
+        text = self.art_text_input.text()
+        
         return {
             "enabled": True,
-            "text": self.art_text_input.text(),
+            "text": text,  # 可以为空，上传时会自动替换为文件名
+            "use_filename_if_empty": text == "",  # 标记是否使用文件名
             "style": self.art_style_combo.currentText(),
             "font_size": self.font_size_spin.value(),
             "color": self.text_color_combo.currentText(),
@@ -455,16 +465,18 @@ class UploadUI(QWidget):
             y = text_height + 10
         elif position == "底部居中":
             x = (img_width - text_width) // 2
-            y = img_height - 10
+            # 修复：y值应该是(图像高度 - 文本高度的一部分)，确保文本完全可见
+            y = img_height - (text_height // 2)
         elif position == "居中":
             x = (img_width - text_width) // 2
             y = (img_height + text_height) // 2
         else:
             # 默认底部居中
             x = (img_width - text_width) // 2
-            y = img_height - 10
+            # 使用同样修复的计算方式
+            y = img_height - (text_height // 2)
             
-        return x, y 
+        return x, y
 
     def preview_art_text(self):
         """预览添加艺术字效果"""
@@ -472,8 +484,9 @@ class UploadUI(QWidget):
             # 获取艺术字设置
             text = self.art_text_input.text()
             if not text:
-                QMessageBox.warning(self.parent, "预览提示", "请输入艺术字文本！")
-                return
+                # 使用默认文本作为示例
+                text = "视频文件名示例.mp4"
+                QMessageBox.information(self.parent, "预览提示", "文本内容为空，上传时会自动使用视频文件名。预览将使用示例文件名。")
             
             # 生成预览图像
             preview_image = self.generate_art_text_preview(text)
