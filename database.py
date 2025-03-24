@@ -574,20 +574,57 @@ class DatabaseManager:
             bool: 是否删除成功
         """
         try:
+            print(f"开始删除账号 {appid}...")
             conn = self.get_connection()
             cursor = conn.cursor()
             
-            # 删除账号
-            cursor.execute('DELETE FROM accounts WHERE appid = ?', (appid,))
+            # 先检查账号是否存在
+            cursor.execute('SELECT id FROM accounts WHERE appid = ?', (appid,))
+            account_exists = cursor.fetchone()
+            if not account_exists:
+                print(f"账号 {appid} A不存在，无法删除")
+                conn.close()
+                return False
             
-            # 同时删除该账号的所有视频数据
-            cursor.execute('DELETE FROM videos WHERE appid = ?', (appid,))
-            
-            conn.commit()
-            conn.close()
-            return True
+            print(f"开始删除账号 {appid} 的数据...")
+            try:
+                # 删除账号
+                cursor.execute('DELETE FROM accounts WHERE appid = ?', (appid,))
+                
+                # 同时删除该账号的所有视频数据
+                cursor.execute('DELETE FROM videos WHERE appid = ?', (appid,))
+                
+                # 删除账号文件夹信息 (如果存在account_folders表)
+                try:
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='account_folders'")
+                    if cursor.fetchone():
+                        cursor.execute('DELETE FROM account_folders WHERE appid = ?', (appid,))
+                        print(f"已删除账号 {appid} 的文件夹信息")
+                except Exception as e:
+                    print(f"删除账号 {appid} 的文件夹信息时出错: {str(e)}")
+                
+                # 删除其他相关表中的数据 (如果存在)
+                for table_name in ['folder_settings', 'account_settings', 'account_topics']:
+                    try:
+                        cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'")
+                        if cursor.fetchone():
+                            cursor.execute(f'DELETE FROM {table_name} WHERE appid = ?', (appid,))
+                            print(f"已删除账号 {appid} 在表 {table_name} 中的数据")
+                    except Exception as e:
+                        print(f"删除账号 {appid} 在表 {table_name} 中的数据时出错: {str(e)}")
+                
+                conn.commit()
+                print(f"成功删除账号 {appid} 的所有数据")
+                conn.close()
+                return True
+            except Exception as e:
+                print(f"删除账号 {appid} 时发生错误: {str(e)}")
+                conn.rollback()
+                conn.close()
+                return False
         except Exception as e:
             print(f"删除账号失败: {str(e)}")
+            traceback.print_exc()
             return False
 
     def save_account(self, appid, account_name, cookies):
@@ -1294,211 +1331,131 @@ class DatabaseManager:
                 conn.close()
             return 0
 
-    def get_today_videos(self):
-        """获取今日的所有视频数据
-        
-        Returns:
-            list: 包含今日所有视频数据的列表
-        """
-        try:
-            today = datetime.now().strftime('%Y-%m-%d')
-            print(f"正在查询今日({today})的视频数据...")
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            
-            # 查询今天的所有视频数据
-            cursor.execute('''
-                SELECT content_id, title, send_time, pv, praise_count, reply_count,
-                       account_name, appid, analyze_date, is_abnormal, recommend, audit_reason
-                FROM videos 
-                WHERE analyze_date = ?
-                ORDER BY pv DESC
-            ''', (today,))
-            
-            rows = cursor.fetchall()
-            conn.close()
-            
-            if not rows:
-                print(f"数据库中未找到{today}的视频数据")
-                return []
-                
-            # 构建视频数据列表
-            videos = []
-            for row in rows:
-                content_id, title, send_time, pv, praise_count, reply_count, \
-                account_name, appid, analyze_date, is_abnormal, recommend, audit_reason = row
-                
-                # 处理时间戳
-                if send_time and isinstance(send_time, (int, float)) or (isinstance(send_time, str) and send_time.isdigit()):
-                    try:
-                        send_time_value = int(send_time) if isinstance(send_time, str) else send_time
-                        send_time = datetime.fromtimestamp(send_time_value/1000).strftime("%Y-%m-%d %H:%M:%S")
-                    except:
-                        pass
-                
-                video = {
-                    'content_id': content_id,
-                    'title': title,
-                    'send_time': send_time,
-                    'pv': pv,
-                    'praise_count': praise_count,
-                    'reply_count': reply_count,
-                    'account_name': account_name,
-                    'appid': appid,
-                    'analyze_date': analyze_date,
-                    'is_abnormal': is_abnormal == 1,
-                    'recommend': recommend == 1,
-                    'audit_reason': audit_reason
-                }
-                videos.append(video)
-            
-            print(f"成功获取{today}的视频数据，共{len(videos)}条")
-            # 打印前5条视频数据以便调试
-            if videos:
-                print("视频数据示例:")
-                for i, video in enumerate(videos[:5]):
-                    print(f"  {i+1}. {video['title']} (播放量: {video['pv']})")
-            return videos
-        except Exception as e:
-            print(f"获取今日视频数据失败: {str(e)}")
-            traceback.print_exc()
-            return []
-
     def get_videos_by_date(self, query_date):
-        """按指定日期获取视频数据
+        """根据查询日期获取视频列表
         
         Args:
-            query_date (str): 查询日期，格式为'yyyy-MM-dd'
+            query_date: 查询日期 (格式: YYYY-MM-DD)
             
         Returns:
-            list: 包含指定日期所有视频数据的列表
+            list: 视频列表
         """
         try:
-            print(f"正在查询{query_date}的视频数据...")
-            conn = self.get_connection()
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            # 查询指定日期的所有视频数据
-            cursor.execute('''
-                SELECT content_id, title, send_time, pv, praise_count, reply_count,
-                       account_name, appid, analyze_date, is_abnormal, recommend, audit_reason
-                FROM videos 
-                WHERE analyze_date = ?
-                ORDER BY pv DESC
-            ''', (query_date,))
+            query = """
+            SELECT v.*, a.account_name 
+            FROM videos v
+            LEFT JOIN accounts a ON v.appid = a.appid
+            WHERE v.query_date = ? OR v.send_time LIKE ?
+            ORDER BY v.pv DESC
+            """
             
+            cursor.execute(query, (query_date, f"{query_date}%"))
             rows = cursor.fetchall()
-            conn.close()
             
-            if not rows:
-                print(f"数据库中未找到{query_date}的视频数据")
-                return []
-                
-            # 构建视频数据列表
             videos = []
             for row in rows:
-                content_id, title, send_time, pv, praise_count, reply_count, \
-                account_name, appid, analyze_date, is_abnormal, recommend, audit_reason = row
+                video = dict(row)
+                # 确保播放量字段为整数类型
+                try:
+                    video['pv'] = int(video.get('pv', 0))
+                except (ValueError, TypeError):
+                    video['pv'] = 0
                 
-                # 处理时间戳
-                if send_time and isinstance(send_time, (int, float)) or (isinstance(send_time, str) and send_time.isdigit()):
-                    try:
-                        send_time_value = int(send_time) if isinstance(send_time, str) else send_time
-                        send_time = datetime.fromtimestamp(send_time_value/1000).strftime("%Y-%m-%d %H:%M:%S")
-                    except:
-                        pass
+                # 确保点赞数字段为整数类型
+                try:
+                    video['praise_count'] = int(video.get('praise_count', 0))
+                except (ValueError, TypeError):
+                    video['praise_count'] = 0
                 
-                video = {
-                    'content_id': content_id,
-                    'title': title,
-                    'send_time': send_time,
-                    'pv': pv,
-                    'praise_count': praise_count,
-                    'reply_count': reply_count,
-                    'account_name': account_name,
-                    'appid': appid,
-                    'analyze_date': analyze_date,
-                    'is_abnormal': is_abnormal == 1,
-                    'recommend': recommend == 1,
-                    'audit_reason': audit_reason
-                }
+                # 确保评论数字段为整数类型
+                try:
+                    video['reply_count'] = int(video.get('reply_count', 0))
+                except (ValueError, TypeError):
+                    video['reply_count'] = 0
+                
                 videos.append(video)
             
-            print(f"成功获取{query_date}的视频数据，共{len(videos)}条")
+            conn.close()
             return videos
+            
         except Exception as e:
-            print(f"获取{query_date}视频数据失败: {str(e)}")
+            print(f"获取视频数据时出错: {str(e)}")
             traceback.print_exc()
             return []
-
-    def get_today_published_videos(self):
-        """获取今日发布的所有视频数据（通过send_time匹配）
+            
+    def get_today_videos(self):
+        """获取今日视频数据
         
         Returns:
-            list: 包含今日发布的所有视频数据的列表
+            list: 视频列表
         """
         try:
-            today = datetime.now().strftime('%Y-%m-%d')
-            print(f"正在查询今日({today})发布的视频数据...")
-            conn = self.get_connection()
+            # 获取今天的日期
+            today = datetime.now().strftime("%Y-%m-%d")
+            return self.get_videos_by_date(today)
+            
+        except Exception as e:
+            print(f"获取今日视频数据时出错: {str(e)}")
+            traceback.print_exc()
+            return []
+            
+    def get_today_published_videos(self):
+        """获取今日发布的视频
+        
+        Returns:
+            list: 视频列表
+        """
+        try:
+            # 获取今天的日期
+            today = datetime.now().strftime("%Y-%m-%d")
+            
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            # 查询今天发布的所有视频数据，匹配send_time字段中包含今日日期的记录
-            # 注意：send_time可能是时间戳也可能是格式化后的时间字符串
-            cursor.execute('''
-                SELECT content_id, title, send_time, pv, praise_count, reply_count,
-                       account_name, appid, analyze_date, is_abnormal, recommend, audit_reason
-                FROM videos 
-                WHERE send_time LIKE ?
-                ORDER BY pv DESC
-            ''', (f'%{today}%',))
+            query = """
+            SELECT v.*, a.account_name 
+            FROM videos v
+            LEFT JOIN accounts a ON v.appid = a.appid
+            WHERE v.send_time LIKE ?
+            ORDER BY v.pv DESC
+            """
             
+            cursor.execute(query, (f"{today}%",))
             rows = cursor.fetchall()
-            conn.close()
             
-            if not rows:
-                print(f"数据库中未找到{today}发布的视频数据")
-                return []
-                
-            # 构建视频数据列表
             videos = []
             for row in rows:
-                content_id, title, send_time, pv, praise_count, reply_count, \
-                account_name, appid, analyze_date, is_abnormal, recommend, audit_reason = row
+                video = dict(row)
+                # 确保播放量字段为整数类型
+                try:
+                    video['pv'] = int(video.get('pv', 0))
+                except (ValueError, TypeError):
+                    video['pv'] = 0
                 
-                # 处理时间戳
-                if send_time and isinstance(send_time, (int, float)) or (isinstance(send_time, str) and send_time.isdigit()):
-                    try:
-                        send_time_value = int(send_time) if isinstance(send_time, str) else send_time
-                        send_time = datetime.fromtimestamp(send_time_value/1000).strftime("%Y-%m-%d %H:%M:%S")
-                    except:
-                        pass
+                # 确保点赞数字段为整数类型
+                try:
+                    video['praise_count'] = int(video.get('praise_count', 0))
+                except (ValueError, TypeError):
+                    video['praise_count'] = 0
                 
-                video = {
-                    'content_id': content_id,
-                    'title': title,
-                    'send_time': send_time,
-                    'pv': pv,
-                    'praise_count': praise_count,
-                    'reply_count': reply_count,
-                    'account_name': account_name,
-                    'appid': appid,
-                    'analyze_date': analyze_date,
-                    'is_abnormal': is_abnormal == 1,
-                    'recommend': recommend == 1,
-                    'audit_reason': audit_reason
-                }
+                # 确保评论数字段为整数类型
+                try:
+                    video['reply_count'] = int(video.get('reply_count', 0))
+                except (ValueError, TypeError):
+                    video['reply_count'] = 0
+                
                 videos.append(video)
             
-            print(f"成功获取{today}发布的视频数据，共{len(videos)}条")
-            # 打印前5条视频数据以便调试
-            if videos:
-                print("视频数据示例:")
-                for i, video in enumerate(videos[:5]):
-                    print(f"  {i+1}. {video['title']} (发布时间: {video['send_time']}, 播放量: {video['pv']})")
+            conn.close()
             return videos
+            
         except Exception as e:
-            print(f"获取今日发布视频数据失败: {str(e)}")
+            print(f"获取今日发布视频数据时出错: {str(e)}")
             traceback.print_exc()
             return []
 

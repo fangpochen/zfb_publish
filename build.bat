@@ -1,19 +1,46 @@
-project_root/
-│
-├── main.py
-├── zfb.py
-├── db.py
-├── build.py
-├── build.bat
-├── requirements.txt
-├── default_cover.jpg
-│
-├── ui/
-│   ├── ui.py
-│   ├── icon.ico (如果有)
-│   └── other_ui_files...
-│
-└── dist/
-    └── 支付宝视频发布工具/
-        ├── 支付宝视频发布工具.exe
-        └── dependencies... 
+@echo off
+echo =========================
+echo  支付宝上传和分析工具打包
+echo =========================
+echo.
+
+:: 检查Python是否存在
+python --version >nul 2>&1
+if %errorlevel% neq 0 (
+    echo 错误: 系统未安装Python或Python未添加到PATH
+    echo 请安装Python 3.7或更高版本
+    pause
+    exit /b 1
+)
+
+:: 检查是否有项目必需文件
+if not exist main.py (
+    if not exist app.py (
+        echo 警告: 未找到main.py或app.py入口文件
+        echo 脚本将尝试自动检测合适的入口文件
+    )
+)
+
+:: 显示提示信息
+echo 打包前准备...
+echo - 将自动安装所需依赖
+echo - 将自动检测适合的入口文件
+echo - 将自动包含fonts目录下的字体文件
+echo - 将自动包含项目所需的所有依赖
+echo.
+echo 打包可能需要几分钟时间，请耐心等待...
+echo.
+
+:: 执行打包脚本
+echo 开始执行打包脚本...
+python build_dir.py
+
+if %errorlevel% neq 0 (
+    echo 打包失败! 请查看错误信息。
+    echo 如果遇到权限问题，请尝试以管理员身份运行此脚本。
+) else (
+    echo 打包成功! 可执行文件位于dist目录和当前目录。
+    echo 文件名为: 支付宝上传和分析工具.exe
+)
+
+pause 

@@ -454,14 +454,28 @@ class AccountManager:
     def remove_account(self):
         """删除选中的账号"""
         try:
+            self.log("开始执行删除账号操作...")
             # 检查是否有选中的账号
             selected_rows = []
             for row in range(self.ui.accountTable.rowCount()):
-                checkbox = self.ui.accountTable.cellWidget(row, 0)
-                if checkbox and checkbox.isChecked():
+                checkbox_container = self.ui.accountTable.cellWidget(row, 0)
+                is_checked = False
+                
+                if checkbox_container:
+                    # 在容器中查找QCheckBox
+                    for child in checkbox_container.findChildren(QCheckBox):
+                        if child.isChecked():
+                            is_checked = True
+                            break
+                
+                if is_checked:
                     selected_rows.append(row)
+                    self.log(f"选中了第 {row+1} 行的账号")
+            
+            self.log(f"共选中了 {len(selected_rows)} 个账号")
             
             if not selected_rows:
+                self.log("没有选中任何账号")
                 QMessageBox.warning(self.parent, "提示", "请先选择至少一个账号")
                 return
                 
@@ -476,22 +490,131 @@ class AccountManager:
             if reply == QMessageBox.Yes:
                 # 执行删除
                 success_count = 0
+                failed_accounts = []
                 
                 for row in selected_rows:
-                    appid = self.ui.accountTable.item(row, 2).text()
-                    if hasattr(self.db, 'remove_account'):
-                        if self.db.remove_account(appid):
-                            success_count += 1
+                    try:
+                        appid_item = self.ui.accountTable.item(row, 2)
+                        if not appid_item:
+                            self.log(f"错误：无法获取第 {row+1} 行的账号ID")
+                            continue
+                            
+                        appid = appid_item.text()
+                        self.log(f"正在删除账号 {appid}...")
+                        
+                        if hasattr(self.db, 'remove_account'):
+                            if self.db.remove_account(appid):
+                                success_count += 1
+                                self.log(f"成功删除账号 {appid}")
+                            else:
+                                failed_accounts.append(appid)
+                                self.log(f"删除账号 {appid} 失败")
+                        else:
+                            self.log("错误：数据库缺少remove_account方法")
+                            break
+                    except Exception as e:
+                        self.log(f"删除第 {row+1} 行账号时发生错误: {str(e)}")
                 
                 if success_count > 0:
                     self.log(f"成功删除 {success_count}/{len(selected_rows)} 个账号")
                     # 重新加载账号列表
                     self.load_accounts()
+                    QMessageBox.information(self.parent, "删除成功", f"成功删除 {success_count}/{len(selected_rows)} 个账号")
                 else:
-                    QMessageBox.warning(self.parent, "错误", f"删除账号失败")
-                    
+                    error_msg = "删除账号失败"
+                    if failed_accounts:
+                        error_msg += f"\n失败的账号: {', '.join(failed_accounts)}"
+                    self.log(error_msg)
+                    QMessageBox.warning(self.parent, "错误", error_msg)
+                
         except Exception as e:
             self.log(f"删除账号时出错: {str(e)}")
+            traceback.print_exc()
+            QMessageBox.critical(self.parent, "错误", f"删除账号时出现未知错误: {str(e)}")
+    
+    def clear_account_data(self, clear_all=False):
+        """清除账号数据
+        
+        Args:
+            clear_all: 是否清除所有账号数据。如果为False，则只清除选中的账号
+        """
+        try:
+            if clear_all:
+                # 显示确认对话框
+                reply = QMessageBox.question(
+                    self.parent, "确认清空所有数据", 
+                    "确定要清空所有账号数据吗？此操作不可恢复！",
+                    QMessageBox.Yes | QMessageBox.No, 
+                    QMessageBox.No
+                )
+                
+                if reply == QMessageBox.Yes:
+                    # 获取所有账号ID
+                    account_ids = [account['appid'] for account in self.accounts]
+                    if not account_ids:
+                        QMessageBox.information(self.parent, "提示", "没有找到任何账号")
+                        return
+                    
+                    # 执行删除
+                    success_count = 0
+                    for appid in account_ids:
+                        if hasattr(self.db, 'remove_account'):
+                            if self.db.remove_account(appid):
+                                success_count += 1
+                    
+                    if success_count > 0:
+                        self.log(f"成功清空 {success_count}/{len(account_ids)} 个账号数据")
+                        # 重新加载账号列表
+                        self.load_accounts()
+                    else:
+                        QMessageBox.warning(self.parent, "错误", "清空账号数据失败")
+            else:
+                # 检查是否有选中的账号
+                selected_accounts = []
+                for row in range(self.ui.accountTable.rowCount()):
+                    checkbox_container = self.ui.accountTable.cellWidget(row, 0)
+                    is_checked = False
+                    
+                    if checkbox_container:
+                        for child in checkbox_container.findChildren(QCheckBox):
+                            if child.isChecked():
+                                is_checked = True
+                                break
+                    
+                    if is_checked:
+                        appid_item = self.ui.accountTable.item(row, 2)
+                        if appid_item:
+                            selected_accounts.append(appid_item.text())
+                
+                if not selected_accounts:
+                    QMessageBox.warning(self.parent, "提示", "请先选择至少一个账号")
+                    return
+                
+                # 显示确认对话框
+                reply = QMessageBox.question(
+                    self.parent, "确认清空选中账号数据", 
+                    f"确定要清空选中的 {len(selected_accounts)} 个账号数据吗？此操作不可恢复！",
+                    QMessageBox.Yes | QMessageBox.No, 
+                    QMessageBox.No
+                )
+                
+                if reply == QMessageBox.Yes:
+                    # 执行删除
+                    success_count = 0
+                    for appid in selected_accounts:
+                        if hasattr(self.db, 'remove_account'):
+                            if self.db.remove_account(appid):
+                                success_count += 1
+                    
+                    if success_count > 0:
+                        self.log(f"成功清空 {success_count}/{len(selected_accounts)} 个账号数据")
+                        # 重新加载账号列表
+                        self.load_accounts()
+                    else:
+                        QMessageBox.warning(self.parent, "错误", "清空选中账号数据失败")
+        
+        except Exception as e:
+            self.log(f"清空账号数据时出错: {str(e)}")
             traceback.print_exc()
     
     def search_accounts(self, keyword):

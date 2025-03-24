@@ -281,7 +281,7 @@ class RecommendAnalysisUI(object):
         self.accountTable.verticalHeader().setVisible(False)
         self.accountTable.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.accountTable.horizontalHeader().setStretchLastSection(True)
-        self.accountTable.setMinimumHeight(700)  # 增加最小高度，确保显示更多行
+        self.accountTable.setMinimumHeight(350)  # 减小最小高度，确保能看到下方内容
         
         # 设置列宽
         self.accountTable.setColumnWidth(0, 50)   # 选择
@@ -317,7 +317,7 @@ class RecommendAnalysisUI(object):
         self.mainSplitter.addWidget(self.tabWidget)
         
         # 设置拆分比例，使账号表格占更多空间
-        self.mainSplitter.setSizes([800, 200])
+        self.mainSplitter.setSizes([500, 500])
         
         # 将拆分器添加到主布局
         self.mainLayout.addWidget(self.mainSplitter)

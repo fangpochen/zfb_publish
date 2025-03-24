@@ -11,9 +11,9 @@ import pandas as pd
 import numpy as np
 from PyQt5.QtWidgets import (QMessageBox, QInputDialog, QFileDialog, 
                             QTableWidgetItem, QHeaderView, QProgressDialog,
-                            QDateEdit, QCheckBox)
+                            QDateEdit, QCheckBox, QDialog, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout)
 from PyQt5.QtCore import Qt, QDate, QThread, pyqtSignal, QObject
-from PyQt5.QtGui import QColor, QBrush
+from PyQt5.QtGui import QColor, QBrush, QFont
 import threading
 import glob
 import sqlite3
@@ -316,107 +316,178 @@ class VideoAnalyzer:
             traceback.print_exc()
     
     def update_data_table(self, videos):
-        """更新数据表格
+        """更新视频数据表格
         
         Args:
-            videos: 要显示的视频列表
+            videos: 视频数据列表
         """
         try:
-            if not hasattr(self.ui, 'dataTableWidget'):
-                self.log("UI中缺少dataTableWidget组件")
-                return
-                
-            # 清空表格
+            # 先禁用排序以提高性能
+            self.ui.dataTableWidget.setSortingEnabled(False)
+            self.ui.dataTableWidget.clearContents()
             self.ui.dataTableWidget.setRowCount(0)
             
-            # 设置表格列头
-            if self.ui.dataTableWidget.columnCount() < 9:
-                self.ui.dataTableWidget.setColumnCount(9)
-                self.ui.dataTableWidget.setHorizontalHeaderLabels([
-                    "作品ID", "标题", "账号昵称", "发布时间", "播放量", 
-                    "点赞数", "评论数", "推荐状态", "异常状态"
-                ])
+            if not videos:
+                # 恢复排序功能
+                self.ui.dataTableWidget.setSortingEnabled(True)
+                return
+                
+            # 设置行数
+            row_count = len(videos)
+            self.ui.dataTableWidget.setRowCount(row_count)
             
-            # 添加视频数据到表格
+            # 设置列数和表头
+            if self.ui.dataTableWidget.columnCount() < 11:
+                self.ui.dataTableWidget.setColumnCount(11)
+                headers = ["序号", "作品ID", "标题", "账号ID", "账号昵称", "发布时间", 
+                           "播放量", "点赞数", "评论数", "推荐状态", "异常状态"]
+                self.ui.dataTableWidget.setHorizontalHeaderLabels(headers)
+    
+            # 打印每个视频的播放量，用于调试
+            self.log("视频播放量数据:")
+            for i, video in enumerate(videos[:5]):  # 只打印前5个视频
+                self.log(f"视频 {i+1}: {video.get('content_id', '')}, 播放量: {video.get('pv', 0)}, 类型: {type(video.get('pv', 0))}")
+    
+            # 填充数据
             for i, video in enumerate(videos):
-                self.ui.dataTableWidget.insertRow(i)
+                # 序号
+                item_index = QTableWidgetItem(str(i + 1))
+                item_index.setTextAlignment(Qt.AlignCenter)
+                self.ui.dataTableWidget.setItem(i, 0, item_index)
                 
                 # 作品ID
-                item_id = QTableWidgetItem(video.get("content_id", ""))
-                self.ui.dataTableWidget.setItem(i, 0, item_id)
+                content_id = video.get('content_id', '')
+                item_content = QTableWidgetItem(content_id)
+                item_content.setTextAlignment(Qt.AlignCenter)
+                self.ui.dataTableWidget.setItem(i, 1, item_content)
                 
                 # 标题
-                item_title = QTableWidgetItem(video.get("title", ""))
-                self.ui.dataTableWidget.setItem(i, 1, item_title)
+                title = video.get('title', '')
+                item_title = QTableWidgetItem(title)
+                self.ui.dataTableWidget.setItem(i, 2, item_title)
+                
+                # 账号ID
+                appid = video.get('appid', '')
+                item_appid = QTableWidgetItem(appid)
+                item_appid.setTextAlignment(Qt.AlignCenter)
+                self.ui.dataTableWidget.setItem(i, 3, item_appid)
                 
                 # 账号昵称
-                item_account = QTableWidgetItem(video.get("account_name", ""))
-                self.ui.dataTableWidget.setItem(i, 2, item_account)
+                account_name = video.get('account_name', '')
+                item_account = QTableWidgetItem(account_name)
+                item_account.setTextAlignment(Qt.AlignCenter)
+                self.ui.dataTableWidget.setItem(i, 4, item_account)
                 
                 # 发布时间
-                send_time = video.get("send_time", "")
-                if send_time:
+                send_time = video.get('send_time', '')
+                if isinstance(send_time, (int, float)):
                     try:
-                        # 尝试解析时间戳
-                        if isinstance(send_time, (int, float)):
-                            send_time = datetime.fromtimestamp(send_time/1000).strftime("%Y-%m-%d %H:%M:%S")
-                        elif isinstance(send_time, str) and send_time.isdigit():
-                            send_time = datetime.fromtimestamp(int(send_time)/1000).strftime("%Y-%m-%d %H:%M:%S")
+                        send_time = datetime.fromtimestamp(send_time/1000).strftime("%Y-%m-%d %H:%M:%S")
                     except:
                         pass
                 item_time = QTableWidgetItem(str(send_time))
-                self.ui.dataTableWidget.setItem(i, 3, item_time)
+                item_time.setTextAlignment(Qt.AlignCenter)
+                self.ui.dataTableWidget.setItem(i, 5, item_time)
                 
-                # 播放量
-                item_play = QTableWidgetItem(str(video.get("pv", 0)))
-                self.ui.dataTableWidget.setItem(i, 4, item_play)
+                # 播放量 - 确保以整数形式存储用于排序
+                play_count_raw = video.get('pv', 0)
+                try:
+                    if isinstance(play_count_raw, str):
+                        play_count = int(play_count_raw.replace(',', ''))  # 处理可能的千分位符号
+                    else:
+                        play_count = int(play_count_raw)
+                except (ValueError, TypeError):
+                    play_count = 0
+                    
+                item_play = QTableWidgetItem()
+                # 使用setData设置整数值用于排序
+                item_play.setData(Qt.DisplayRole, play_count)
+                item_play.setTextAlignment(Qt.AlignCenter)
+                self.ui.dataTableWidget.setItem(i, 6, item_play)
                 
-                # 点赞数
-                item_like = QTableWidgetItem(str(video.get("praise_count", 0)))
-                self.ui.dataTableWidget.setItem(i, 5, item_like)
+                # 点赞数 - 确保以整数形式存储用于排序
+                like_count_raw = video.get('praise_count', 0)
+                try:
+                    if isinstance(like_count_raw, str):
+                        like_count = int(like_count_raw.replace(',', ''))
+                    else:
+                        like_count = int(like_count_raw)
+                except (ValueError, TypeError):
+                    like_count = 0
+                    
+                item_like = QTableWidgetItem()
+                item_like.setData(Qt.DisplayRole, like_count)  # 使用setData确保存储为整数
+                item_like.setTextAlignment(Qt.AlignCenter)
+                self.ui.dataTableWidget.setItem(i, 7, item_like)
                 
-                # 评论数
-                item_comment = QTableWidgetItem(str(video.get("reply_count", 0)))
-                self.ui.dataTableWidget.setItem(i, 6, item_comment)
+                # 评论数 - 确保以整数形式存储用于排序
+                comment_count_raw = video.get('reply_count', 0)
+                try:
+                    if isinstance(comment_count_raw, str):
+                        comment_count = int(comment_count_raw.replace(',', ''))
+                    else:
+                        comment_count = int(comment_count_raw)
+                except (ValueError, TypeError):
+                    comment_count = 0
+                    
+                item_comment = QTableWidgetItem()
+                item_comment.setData(Qt.DisplayRole, comment_count)  # 使用setData确保存储为整数
+                item_comment.setTextAlignment(Qt.AlignCenter)
+                self.ui.dataTableWidget.setItem(i, 8, item_comment)
                 
                 # 推荐状态
-                recommend = video.get("recommend", False)
-                recommend_text = "已推荐" if recommend else "未推荐"
+                recommend = video.get('recommend', False)
+                recommend_text = "是" if recommend else "否"
                 item_recommend = QTableWidgetItem(recommend_text)
+                item_recommend.setTextAlignment(Qt.AlignCenter)
+                # 设置背景色：绿色表示已推荐，红色表示未推荐
                 if recommend:
-                    item_recommend.setBackground(QBrush(QColor(144, 238, 144)))  # 浅绿色
+                    item_recommend.setBackground(QBrush(QColor(200, 255, 200)))  # 浅绿色
                 else:
                     item_recommend.setBackground(QBrush(QColor(255, 200, 200)))  # 浅红色
-                self.ui.dataTableWidget.setItem(i, 7, item_recommend)
+                self.ui.dataTableWidget.setItem(i, 9, item_recommend)
                 
                 # 异常状态
-                is_abnormal = video.get("is_abnormal", False)
-                item_abnormal = QTableWidgetItem("是" if is_abnormal else "否")
+                is_abnormal = video.get('is_abnormal', False)
+                abnormal_text = "是" if is_abnormal else "否"
+                item_abnormal = QTableWidgetItem(abnormal_text)
+                item_abnormal.setTextAlignment(Qt.AlignCenter)
+                # 设置背景色：红色表示异常，绿色表示正常
                 if is_abnormal:
                     item_abnormal.setBackground(QBrush(QColor(255, 200, 200)))  # 浅红色
-                self.ui.dataTableWidget.setItem(i, 8, item_abnormal)
+                else:
+                    item_abnormal.setBackground(QBrush(QColor(200, 255, 200)))  # 浅绿色
+                self.ui.dataTableWidget.setItem(i, 10, item_abnormal)
                 
-                # 设置每一行的高度
-                self.ui.dataTableWidget.setRowHeight(i, 30)
+            # 调整列宽以适应内容
+            self.ui.dataTableWidget.resizeColumnsToContents()
             
-            # 调整列宽
-            self.ui.dataTableWidget.setColumnWidth(0, 100)  # 作品ID
-            self.ui.dataTableWidget.setColumnWidth(1, 200)  # 标题
-            self.ui.dataTableWidget.setColumnWidth(2, 100)  # 账号昵称
-            self.ui.dataTableWidget.setColumnWidth(3, 150)  # 发布时间
-            self.ui.dataTableWidget.setColumnWidth(4, 80)   # 播放量
-            self.ui.dataTableWidget.setColumnWidth(5, 80)   # 点赞数
-            self.ui.dataTableWidget.setColumnWidth(6, 80)   # 评论数
-            self.ui.dataTableWidget.setColumnWidth(7, 80)   # 推荐状态
-            self.ui.dataTableWidget.setColumnWidth(8, 80)   # 异常状态
+            # 重新启用排序功能并默认按播放量降序排序
+            self.ui.dataTableWidget.setSortingEnabled(True)
+            self.log("设置默认排序: 按播放量降序排序")
+            self.ui.dataTableWidget.sortItems(6, Qt.DescendingOrder)  # 6是播放量列的索引
             
-            # 更新视频数量标签
+            # 打印排序后的结果(前5行)，用于调试
+            self.log("排序后的数据:")
+            for row in range(min(5, self.ui.dataTableWidget.rowCount())):
+                play_item = self.ui.dataTableWidget.item(row, 6)
+                play_value = play_item.data(Qt.DisplayRole) if play_item else "无数据"
+                self.log(f"行 {row+1}: 播放量 = {play_value}")
+            
+            # 更新状态栏显示信息
             if hasattr(self.ui, 'videoCountLabel'):
                 self.ui.videoCountLabel.setText(f"共 {len(videos)} 个视频")
+            
+            # 启用分析按钮
+            if hasattr(self.ui, 'pushButton_analyze'):
+                self.ui.pushButton_analyze.setEnabled(True)
                 
         except Exception as e:
             self.log(f"更新数据表格时出错: {str(e)}")
             traceback.print_exc()
+            # 确保恢复排序功能
+            if hasattr(self, 'ui') and hasattr(self.ui, 'dataTableWidget'):
+                self.ui.dataTableWidget.setSortingEnabled(True)
     
     def check_duplicate_video(self, video_id):
         """检查视频是否重复
@@ -487,6 +558,406 @@ class VideoAnalyzer:
             traceback.print_exc()
             QMessageBox.critical(self.parent, "导出失败", f"导出数据失败: {str(e)}")
     
+    def generate_report(self):
+        """生成视频推荐率分析报告，找出推荐率低于50%的账号"""
+        try:
+            if not self.current_videos:
+                QMessageBox.warning(self.parent, "提示", "没有可分析的数据，请先获取视频数据")
+                return
+                
+            self.log("开始生成视频推荐率分析报告...")
+            
+            # 按账号分组统计视频数据
+            account_stats = {}
+            
+            for video in self.current_videos:
+                # 获取账号ID和名称
+                appid = video.get('appid', '')
+                account_name = video.get('account_name', '')
+                
+                if not appid:
+                    continue
+                    
+                # 如果是新账号，初始化统计数据
+                if appid not in account_stats:
+                    account_stats[appid] = {
+                        'name': account_name,
+                        'appid': appid,  # 添加appid字段
+                        'total_videos': 0,
+                        'recommended_videos': 0,
+                        'total_plays': 0,
+                        'total_likes': 0,
+                        'total_comments': 0,
+                        'abnormal_videos': 0,
+                        'not_pass_count': 0,  # 未通过审核的视频数
+                        'videos': []  # 存储该账号的所有视频详情
+                    }
+                
+                # 更新统计数据
+                stats = account_stats[appid]
+                stats['total_videos'] += 1
+                
+                # 存储视频详情
+                stats['videos'].append(video)
+                
+                # 统计推荐视频
+                is_recommended = video.get('recommend', False)
+                if is_recommended:
+                    stats['recommended_videos'] += 1
+                
+                # 统计未通过审核的视频
+                is_pass = video.get('is_pass', True)
+                if not is_pass:
+                    stats['not_pass_count'] += 1
+                
+                # 统计异常视频
+                is_abnormal = video.get('is_abnormal', False)
+                if is_abnormal:
+                    stats['abnormal_videos'] += 1
+                    
+                # 统计播放量、点赞和评论
+                stats['total_plays'] += int(video.get('pv', 0))
+                stats['total_likes'] += int(video.get('praise_count', 0))
+                stats['total_comments'] += int(video.get('reply_count', 0))
+            
+            # 计算每个账号的推荐率和其他指标
+            for appid, stats in account_stats.items():
+                total = stats['total_videos']
+                if total > 0:
+                    # 计算推荐率
+                    stats['recommend_rate'] = round(stats['recommended_videos'] / total * 100, 2)
+                    
+                    # 计算平均播放量
+                    stats['avg_plays'] = round(stats['total_plays'] / total, 2)
+                    
+                    # 计算平均点赞量
+                    stats['avg_likes'] = round(stats['total_likes'] / total, 2)
+                    
+                    # 计算平均评论量
+                    stats['avg_comments'] = round(stats['total_comments'] / total, 2)
+                    
+                    # 计算异常视频比例
+                    stats['abnormal_rate'] = round(stats['abnormal_videos'] / total * 100, 2)
+                    
+                    # 计算未通过审核比例
+                    stats['not_pass_rate'] = round(stats['not_pass_count'] / total * 100, 2)
+                    
+                    # 找出该账号播放量最高的视频
+                    if stats['videos']:
+                        top_video = max(stats['videos'], key=lambda x: int(x.get('pv', 0)))
+                        stats['top_video'] = {
+                            'title': top_video.get('title', ''),
+                            'plays': int(top_video.get('pv', 0)),
+                            'id': top_video.get('content_id', '')
+                        }
+                else:
+                    stats['recommend_rate'] = 0
+                    stats['avg_plays'] = 0
+                    stats['avg_likes'] = 0
+                    stats['avg_comments'] = 0
+                    stats['abnormal_rate'] = 0
+                    stats['not_pass_rate'] = 0
+                    stats['top_video'] = {'title': '', 'plays': 0, 'id': ''}
+                
+                # 计算互动率 (点赞+评论)/播放量
+                if stats['total_plays'] > 0:
+                    stats['interaction_rate'] = round((stats['total_likes'] + stats['total_comments']) / stats['total_plays'] * 100, 2)
+                else:
+                    stats['interaction_rate'] = 0
+            
+            # 找出推荐率低于50%的账号
+            low_rate_accounts = []
+            for appid, stats in account_stats.items():
+                if stats['recommend_rate'] < 50:
+                    low_rate_accounts.append({
+                        'appid': appid,
+                        'name': stats['name'],
+                        'total_videos': stats['total_videos'],
+                        'recommended_videos': stats['recommended_videos'],
+                        'recommend_rate': stats['recommend_rate'],
+                        'abnormal_rate': stats['abnormal_rate'],
+                        'not_pass_rate': stats['not_pass_rate']
+                    })
+            
+            # 按推荐率排序（从低到高）
+            low_rate_accounts.sort(key=lambda x: x['recommend_rate'])
+            
+            # 创建高播放量账号列表（平均播放量超过1000）
+            high_play_accounts = []
+            for appid, stats in account_stats.items():
+                if stats['avg_plays'] > 1000:
+                    high_play_accounts.append({
+                        'appid': appid,
+                        'name': stats['name'],
+                        'total_videos': stats['total_videos'],
+                        'avg_plays': stats['avg_plays'],
+                        'top_video_title': stats['top_video']['title'],
+                        'top_video_plays': stats['top_video']['plays']
+                    })
+            
+            # 按平均播放量排序（从高到低）
+            high_play_accounts.sort(key=lambda x: x['avg_plays'], reverse=True)
+            
+            # 生成报告
+            self._show_report_dialog(account_stats, low_rate_accounts, high_play_accounts)
+            
+            # 导出报告到Excel
+            self._export_report_to_excel(account_stats, low_rate_accounts, high_play_accounts)
+            
+        except Exception as e:
+            self.log(f"生成视频推荐率报告时出错: {str(e)}")
+            traceback.print_exc()
+            
+    def _show_report_dialog(self, account_stats, low_rate_accounts, high_play_accounts):
+        """显示报告对话框
+        
+        Args:
+            account_stats: 所有账号的统计数据
+            low_rate_accounts: 推荐率低于50%的账号列表
+            high_play_accounts: 高播放量账号列表
+        """
+        try:
+            # 创建报告文本
+            report_title = "视频推荐率与表现分析报告"
+            report_text = f"{report_title}\n{'='*60}\n\n"
+            
+            # 账号总数和分析的视频总数
+            total_accounts = len(account_stats)
+            total_videos = sum(stats['total_videos'] for stats in account_stats.values())
+            total_recommended = sum(stats['recommended_videos'] for stats in account_stats.values())
+            overall_rate = round(total_recommended / total_videos * 100, 2) if total_videos > 0 else 0
+            
+            # 计算总播放量和平均播放量
+            total_plays = sum(stats['total_plays'] for stats in account_stats.values())
+            avg_plays = round(total_plays / total_videos, 2) if total_videos > 0 else 0
+            
+            # 计算总互动数和平均互动率
+            total_likes = sum(stats['total_likes'] for stats in account_stats.values())
+            total_comments = sum(stats['total_comments'] for stats in account_stats.values())
+            avg_interaction = round((total_likes + total_comments) / total_plays * 100, 2) if total_plays > 0 else 0
+            
+            report_text += f"分析账号总数: {total_accounts}\n"
+            report_text += f"分析视频总数: {total_videos}\n"
+            report_text += f"推荐视频总数: {total_recommended}\n"
+            report_text += f"总体推荐率: {overall_rate}%\n"
+            report_text += f"总播放量: {total_plays}\n"
+            report_text += f"平均播放量: {avg_plays}\n"
+            report_text += f"总点赞量: {total_likes}\n"
+            report_text += f"总评论数: {total_comments}\n"
+            report_text += f"总体互动率: {avg_interaction}%\n\n"
+            
+            # 推荐率低于50%的账号数
+            low_rate_count = len(low_rate_accounts)
+            if total_accounts > 0:
+                low_rate_percent = round(low_rate_count/total_accounts*100, 2)
+            else:
+                low_rate_percent = 0
+            report_text += f"推荐率低于50%的账号数: {low_rate_count} ({low_rate_percent}%)\n\n"
+            
+            # 推荐率低于50%的账号详情
+            if low_rate_accounts:
+                report_text += "推荐率低于50%的账号详情:\n"
+                report_text += f"{'账号ID':<20}{'账号名称':<20}{'视频总数':<10}{'推荐数':<10}{'推荐率':<10}{'未通过率':<10}{'异常率':<10}\n"
+                report_text += f"{'-'*90}\n"
+                
+                for account in low_rate_accounts:
+                    report_text += f"{account['appid']:<20}{account['name'][:18]:<20}{account['total_videos']:<10}{account['recommended_videos']:<10}{account['recommend_rate']}%{account['not_pass_rate']}%{account['abnormal_rate']}%\n"
+                
+                report_text += "\n"
+            
+            # 高播放量账号详情
+            if high_play_accounts:
+                report_text += "高播放量账号详情(平均播放量>1000):\n"
+                report_text += f"{'账号ID':<20}{'账号名称':<20}{'视频总数':<10}{'平均播放量':<15}{'最高播放视频':<30}{'最高播放量':<10}\n"
+                report_text += f"{'-'*105}\n"
+                
+                for account in high_play_accounts:
+                    top_video_title = account['top_video_title']
+                    if len(top_video_title) > 28:
+                        top_video_title = top_video_title[:25] + "..."
+                    report_text += f"{account['appid']:<20}{account['name'][:18]:<20}{account['total_videos']:<10}{account['avg_plays']:<15}{top_video_title:<30}{account['top_video_plays']:<10}\n"
+                
+                report_text += "\n"
+            
+            # 所有账号的推荐率排名
+            report_text += "所有账号推荐率排名:\n"
+            report_text += f"{'排名':<6}{'账号ID':<20}{'账号名称':<20}{'视频总数':<10}{'推荐率':<10}{'平均播放量':<15}{'互动率':<10}\n"
+            report_text += f"{'-'*100}\n"
+            
+            # 按推荐率排序所有账号
+            sorted_accounts = [(appid, stats) for appid, stats in account_stats.items()]
+            sorted_accounts.sort(key=lambda x: x[1]['recommend_rate'], reverse=True)
+            
+            for i, (appid, stats) in enumerate(sorted_accounts):
+                report_text += f"{i+1:<6}{appid:<20}{stats['name'][:18]:<20}{stats['total_videos']:<10}{stats['recommend_rate']}%{stats['avg_plays']:<15}{stats['interaction_rate']}%\n"
+            
+            # 创建对话框
+            dialog = QDialog(self.parent)
+            dialog.setWindowTitle(report_title)
+            dialog.setMinimumSize(800, 600)
+            
+            layout = QVBoxLayout()
+            
+            # 创建文本区域
+            text_edit = QTextEdit()
+            text_edit.setReadOnly(True)
+            text_edit.setPlainText(report_text)
+            text_edit.setFont(QFont("Courier New", 10))
+            layout.addWidget(text_edit)
+            
+            # 添加导出按钮
+            export_button = QPushButton("导出报告到Excel")
+            export_button.clicked.connect(lambda: self._export_report_to_excel(account_stats, low_rate_accounts, high_play_accounts))
+            
+            button_layout = QHBoxLayout()
+            button_layout.addStretch()
+            button_layout.addWidget(export_button)
+            layout.addLayout(button_layout)
+            
+            dialog.setLayout(layout)
+            dialog.exec_()
+            
+        except Exception as e:
+            self.log(f"显示报告对话框时出错: {str(e)}")
+            traceback.print_exc()
+    
+    def _export_report_to_excel(self, account_stats, low_rate_accounts, high_play_accounts):
+        """导出报告到Excel文件
+        
+        Args:
+            account_stats: 所有账号的统计数据
+            low_rate_accounts: 推荐率低于50%的账号列表
+            high_play_accounts: 高播放量账号列表
+        """
+        try:
+            # 打开文件保存对话框
+            file_path, _ = QFileDialog.getSaveFileName(
+                self.parent, "保存报告到Excel", 
+                f"视频推荐率分析报告_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx", 
+                "Excel文件 (*.xlsx);;所有文件 (*.*)"
+            )
+            
+            if not file_path:
+                return  # 用户取消保存
+            
+            # 创建Excel写入器
+            with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+                # 创建所有账号的数据表
+                accounts_data = []
+                for appid, stats in account_stats.items():
+                    accounts_data.append({
+                        '账号ID': appid,
+                        '账号名称': stats['name'],
+                        '视频总数': stats['total_videos'],
+                        '推荐视频数': stats['recommended_videos'],
+                        '推荐率(%)': stats['recommend_rate'],
+                        '未通过审核数': stats['not_pass_count'],
+                        '未通过率(%)': stats['not_pass_rate'],
+                        '异常视频数': stats['abnormal_videos'],
+                        '异常率(%)': stats['abnormal_rate'],
+                        '总播放量': stats['total_plays'],
+                        '平均播放量': stats['avg_plays'],
+                        '总点赞量': stats['total_likes'],
+                        '平均点赞量': stats['avg_likes'],
+                        '总评论数': stats['total_comments'],
+                        '平均评论数': stats['avg_comments'],
+                        '互动率(%)': stats['interaction_rate'],
+                        '最高播放视频': stats['top_video']['title'],
+                        '最高播放量': stats['top_video']['plays']
+                    })
+                
+                # 创建账号数据DataFrame并写入
+                df_accounts = pd.DataFrame(accounts_data)
+                df_accounts = df_accounts.sort_values(by=['推荐率(%)'], ascending=False)
+                df_accounts.to_excel(writer, sheet_name='账号分析', index=False)
+                
+                # 创建低推荐率账号表
+                if low_rate_accounts:
+                    low_rate_data = []
+                    for account in low_rate_accounts:
+                        low_rate_data.append({
+                            '账号ID': account['appid'],
+                            '账号名称': account['name'],
+                            '视频总数': account['total_videos'],
+                            '推荐视频数': account['recommended_videos'],
+                            '推荐率(%)': account['recommend_rate'],
+                            '未通过率(%)': account['not_pass_rate'],
+                            '异常率(%)': account['abnormal_rate']
+                        })
+                    
+                    df_low_rate = pd.DataFrame(low_rate_data)
+                    df_low_rate.to_excel(writer, sheet_name='低推荐率账号', index=False)
+                
+                # 创建高播放量账号表
+                if high_play_accounts:
+                    high_play_data = []
+                    for account in high_play_accounts:
+                        high_play_data.append({
+                            '账号ID': account['appid'],
+                            '账号名称': account['name'],
+                            '视频总数': account['total_videos'],
+                            '平均播放量': account['avg_plays'],
+                            '最高播放视频': account['top_video_title'],
+                            '最高播放量': account['top_video_plays']
+                        })
+                    
+                    df_high_play = pd.DataFrame(high_play_data)
+                    df_high_play = df_high_play.sort_values(by=['平均播放量'], ascending=False)
+                    df_high_play.to_excel(writer, sheet_name='高播放量账号', index=False)
+                
+                # 添加概览表
+                total_accounts = len(account_stats)
+                total_videos = sum(stats['total_videos'] for stats in account_stats.values())
+                total_recommended = sum(stats['recommended_videos'] for stats in account_stats.values())
+                overall_rate = round(total_recommended / total_videos * 100, 2) if total_videos > 0 else 0
+                total_plays = sum(stats['total_plays'] for stats in account_stats.values())
+                avg_plays = round(total_plays / total_videos, 2) if total_videos > 0 else 0
+                total_likes = sum(stats['total_likes'] for stats in account_stats.values())
+                total_comments = sum(stats['total_comments'] for stats in account_stats.values())
+                avg_interaction = round((total_likes + total_comments) / total_plays * 100, 2) if total_plays > 0 else 0
+                
+                overview_data = [
+                    {'指标': '分析账号总数', '数值': total_accounts},
+                    {'指标': '分析视频总数', '数值': total_videos},
+                    {'指标': '推荐视频总数', '数值': total_recommended},
+                    {'指标': '总体推荐率(%)', '数值': overall_rate},
+                    {'指标': '总播放量', '数值': total_plays},
+                    {'指标': '平均播放量', '数值': avg_plays},
+                    {'指标': '总点赞量', '数值': total_likes},
+                    {'指标': '总评论数', '数值': total_comments},
+                    {'指标': '总体互动率(%)', '数值': avg_interaction},
+                    {'指标': '推荐率低于50%的账号数', '数值': len(low_rate_accounts)},
+                    {'指标': '推荐率低于50%的账号比例(%)', '数值': round(len(low_rate_accounts)/total_accounts*100, 2) if total_accounts > 0 else 0},
+                    {'指标': '高播放量账号数(>1000)', '数值': len(high_play_accounts)},
+                    {'指标': '高播放量账号比例(%)', '数值': round(len(high_play_accounts)/total_accounts*100, 2) if total_accounts > 0 else 0}
+                ]
+                
+                df_overview = pd.DataFrame(overview_data)
+                df_overview.to_excel(writer, sheet_name='分析概览', index=False)
+                
+                # 设置Excel列宽
+                for sheet_name in writer.sheets:
+                    worksheet = writer.sheets[sheet_name]
+                    for i, col in enumerate(worksheet.columns):
+                        max_length = 0
+                        column = col[0].column_letter  # Get the column letter
+                        for cell in col:
+                            try:
+                                if len(str(cell.value)) > max_length:
+                                    max_length = len(str(cell.value))
+                            except:
+                                pass
+                        adjusted_width = (max_length + 2)
+                        worksheet.column_dimensions[column].width = adjusted_width
+            
+            self.log(f"成功导出分析报告到: {file_path}")
+            QMessageBox.information(self.parent, "导出成功", f"成功导出分析报告到:\n{file_path}")
+            
+        except Exception as e:
+            self.log(f"导出报告到Excel时出错: {str(e)}")
+            traceback.print_exc()
+            QMessageBox.critical(self.parent, "导出失败", f"导出报告失败: {str(e)}")
+    
     def analyze_data(self):
         """分析数据，生成统计图表"""
         try:
@@ -494,10 +965,8 @@ class VideoAnalyzer:
                 QMessageBox.warning(self.parent, "提示", "没有可分析的数据")
                 return
                 
-            # TODO: 实现数据分析功能
-            # 可以调用图表模块生成各种统计图表
-            
-            self.log("开始分析数据...")
+            # 直接生成综合报告
+            self.generate_report()
             
         except Exception as e:
             self.log(f"分析数据时出错: {str(e)}")

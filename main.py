@@ -4,8 +4,8 @@
 import os
 import sys
 import traceback
-from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox, QSplashScreen, QTableWidget, QHeaderView
-from PyQt5.QtCore import Qt, QDate
+from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox, QSplashScreen, QTableWidget, QHeaderView, QCheckBox
+from PyQt5.QtCore import Qt, QDate, QTimer
 from PyQt5.QtGui import QPixmap
 from datetime import datetime
 
@@ -15,6 +15,42 @@ from folder_manager import FolderManager
 from video_analyzer import VideoAnalyzer
 from chart_manager import ChartManager
 from database import db_manager
+
+# 尝试导入key_verification模块，如果不存在则提供一个替代实现
+try:
+    from key_verification import show_verification_dialog
+    HAS_KEY_VERIFICATION = True
+except ImportError:
+    print("警告: key_verification模块不可用，将跳过验证步骤")
+    # 创建替代函数
+    def show_verification_dialog():
+        print("使用替代验证函数，总是返回True")
+        return True
+    HAS_KEY_VERIFICATION = False
+
+# 添加标志检查函数
+def is_first_run():
+    """检查是否是打包后的首次运行"""
+    # 检查首次运行标志文件
+    flag_file = os.path.join("flags", "FIRST_RUN")
+    if os.path.exists(flag_file):
+        try:
+            with open(flag_file, "r") as f:
+                content = f.read().strip()
+                if content == "1":
+                    # 更新标志文件，标记为非首次运行
+                    try:
+                        with open(flag_file, "w") as f:
+                            f.write("0")
+                        print("标记为非首次运行")
+                    except Exception as e:
+                        print(f"更新首次运行标志失败: {e}")
+                    return True
+        except Exception as e:
+            print(f"读取首次运行标志失败: {e}")
+    
+    # 如果标志文件不存在或内容不为1，则不是首次运行
+    return False
 
 class RecommendAnalysis(QMainWindow):
     """支付宝上传和分析工具主窗口类"""
@@ -77,15 +113,20 @@ class RecommendAnalysis(QMainWindow):
         # 连接信号
         self.setup_signals()
         
-        # 加载数据
-        try:
-            if hasattr(self.account_manager, 'load_accounts'):
-                self.account_manager.load_accounts()
-            else:
-                print("错误：account_manager缺少load_accounts方法")
-        except Exception as e:
-            print(f"加载账号数据失败: {str(e)}")
-            traceback.print_exc()
+        # 检查是否首次运行
+        if is_first_run():
+            self.log_message("检测到首次运行，清空所有账号数据...")
+            self.clear_account_data()
+        else:
+            # 加载数据
+            try:
+                if hasattr(self.account_manager, 'load_accounts'):
+                    self.account_manager.load_accounts()
+                else:
+                    print("错误：account_manager缺少load_accounts方法")
+            except Exception as e:
+                print(f"加载账号数据失败: {str(e)}")
+                traceback.print_exc()
         
         # 显示欢迎信息
         self.log_message("欢迎使用支付宝上传和分析工具")
@@ -98,6 +139,12 @@ class RecommendAnalysis(QMainWindow):
         
         # 自动加载今日视频数据
         self.refresh_all_data()
+        
+        # 初始化保持登录计时器
+        self.keep_login_timer = QTimer(self)
+        self.keep_login_timer.timeout.connect(self.keep_login_alive)
+        # 检查保持登录框的初始状态
+        self.update_keep_login_timer()
     
     def safe_log(self, message):
         """安全的日志记录方法，不依赖UI
@@ -205,7 +252,7 @@ class RecommendAnalysis(QMainWindow):
             # 设置拆分器初始比例，更多展示账号表格
             if hasattr(self.ui, 'mainSplitter'):
                 total_height = self.height()
-                self.ui.mainSplitter.setSizes([int(total_height * 0.8), int(total_height * 0.2)])
+                self.ui.mainSplitter.setSizes([int(total_height * 0.5), int(total_height * 0.5)])
             
             # 设置日志文本框
             if hasattr(self.ui, 'logTextBrowser'):
@@ -264,6 +311,10 @@ class RecommendAnalysis(QMainWindow):
                     lambda: self.account_manager.deselect_all_accounts() if hasattr(self.account_manager, 'deselect_all_accounts') else None
                 )
             
+            # 清除账号按钮 - 直接连接方法，不使用lambda
+            if hasattr(self.ui, 'pushButton_8'):
+                self.ui.pushButton_8.clicked.connect(self.remove_selected_accounts)
+            
             # 清空所有数据按钮
             if hasattr(self.ui, 'clearAllDataButton'):
                 self.ui.clearAllDataButton.clicked.connect(
@@ -273,6 +324,10 @@ class RecommendAnalysis(QMainWindow):
             # 同步所有账号cookies按钮
             if hasattr(self.ui, 'syncAllAccountsCookiesButton'):
                 self.ui.syncAllAccountsCookiesButton.clicked.connect(self.sync_all_accounts_cookies)
+            
+            # 保持登录复选框
+            if hasattr(self.ui, 'keepLoginCheck'):
+                self.ui.keepLoginCheck.stateChanged.connect(self.update_keep_login_timer)
             
         except Exception as e:
             print(f"连接信号时出错: {str(e)}")
@@ -368,6 +423,129 @@ class RecommendAnalysis(QMainWindow):
             print(f"同步账号cookies时出错: {str(e)}")
             traceback.print_exc()
 
+    def update_keep_login_timer(self):
+        """根据keepLoginCheck复选框状态更新保持登录定时器"""
+        try:
+            if hasattr(self.ui, 'keepLoginCheck'):
+                if self.ui.keepLoginCheck.isChecked():
+                    # 设置定时器，每10分钟触发一次，时间单位为毫秒
+                    self.keep_login_timer.start(10 * 60 * 1000)  
+                    self.log_message("已启用保持登录功能，将每10分钟自动刷新登录状态")
+                else:
+                    # 停止定时器
+                    self.keep_login_timer.stop()
+                    self.log_message("已停用保持登录功能")
+        except Exception as e:
+            print(f"更新保持登录定时器时出错: {str(e)}")
+            traceback.print_exc()
+    
+    def keep_login_alive(self):
+        """定时调用query_videos来保持登录状态"""
+        try:
+            # 获取选中的账号
+            selected_accounts = self.account_manager.get_selected_accounts()
+            if not selected_accounts:
+                # 如果没有选中账号，尝试获取第一个有效账号
+                all_accounts = self.account_manager.get_all_accounts()
+                if all_accounts:
+                    selected_accounts = [all_accounts[0]]
+                
+            if selected_accounts:
+                self.log_message("正在执行保持登录操作...")
+                for account in selected_accounts:
+                    appid = account.get('appid')
+                    cookies = account.get('cookies_dict')
+                    if cookies and appid:
+                        try:
+                            # 调用query_videos接口保持登录状态，只请求第一页，最小数据量
+                            today = datetime.now().strftime('%Y-%m-%d')
+                            self.video_analyzer.api_client.query_videos(cookies, appid, today, 1, 5)
+                            self.log_message(f"账号 {appid} 登录状态已刷新")
+                        except Exception as e:
+                            self.log_message(f"刷新账号 {appid} 登录状态时出错: {str(e)}")
+            else:
+                self.log_message("没有可用账号，无法执行保持登录操作")
+                
+        except Exception as e:
+            self.log_message(f"保持登录操作时出错: {str(e)}")
+            traceback.print_exc()
+
+    def remove_selected_accounts(self):
+        """删除选中的账号 - 清除账号按钮的处理函数"""
+        try:
+            self.log_message("开始执行删除账号操作...")
+            # 检查UI状态
+            self.log_message("验证UI状态...")
+            if not hasattr(self, 'ui'):
+                self.log_message("错误：UI对象不存在")
+                return
+            
+            if not hasattr(self.ui, 'accountTable'):
+                self.log_message("错误：UI中缺少accountTable组件")
+                return
+            
+            # 调试输出表格信息
+            rows = self.ui.accountTable.rowCount()
+            cols = self.ui.accountTable.columnCount()
+            self.log_message(f"账号表格当前有 {rows} 行，{cols} 列")
+            
+            # 检查复选框状态
+            for row in range(rows):
+                checkbox_container = self.ui.accountTable.cellWidget(row, 0)
+                if checkbox_container:
+                    for child in checkbox_container.findChildren(QCheckBox):
+                        status = "选中" if child.isChecked() else "未选中"
+                        self.log_message(f"第 {row+1} 行复选框状态: {status}")
+            
+            # 调用账号管理器的方法
+            if hasattr(self.account_manager, 'remove_account'):
+                self.account_manager.remove_account()
+            else:
+                self.log_message("错误：account_manager缺少remove_account方法")
+        except Exception as e:
+            self.log_message(f"删除账号时出错: {str(e)}")
+            traceback.print_exc()
+
+    def clear_account_data(self):
+        """清空所有账号数据，用于首次运行时"""
+        try:
+            self.log_message("正在清空账号数据...")
+            
+            # 检查account_manager是否有clear_account_data方法
+            if hasattr(self.account_manager, 'clear_account_data'):
+                result = self.account_manager.clear_account_data(clear_all=True)
+                if result:
+                    self.log_message("成功清空所有账号数据")
+                else:
+                    self.log_message("清空账号数据失败")
+            else:
+                # 尝试直接操作数据库
+                if hasattr(db_manager, 'remove_all_accounts'):
+                    db_manager.remove_all_accounts()
+                    self.log_message("成功清空所有账号数据")
+                else:
+                    self.log_message("警告：无法找到清空账号数据的方法")
+            
+            # 清空UI表格
+            if hasattr(self.ui, 'accountTable'):
+                self.ui.accountTable.setRowCount(0)
+                self.log_message("已清空账号表格")
+            
+            # 删除cookies文件
+            cookies_dir = os.path.join(os.getcwd(), "cookies")
+            if os.path.exists(cookies_dir) and os.path.isdir(cookies_dir):
+                try:
+                    for file in os.listdir(cookies_dir):
+                        if file.endswith(".txt") or file.endswith(".json"):
+                            os.remove(os.path.join(cookies_dir, file))
+                    self.log_message(f"已清除cookies目录中的文件")
+                except Exception as e:
+                    self.log_message(f"清除cookies文件时出错: {str(e)}")
+            
+        except Exception as e:
+            self.log_message(f"清空账号数据时出错: {str(e)}")
+            traceback.print_exc()
+
 def main():
     """程序入口"""
     try:
@@ -381,6 +559,31 @@ def main():
         
         splash = QSplashScreen(splash_pix)
         splash.show()
+        app.processEvents()
+        
+        # 检查是否是首次运行或是否有key_verification模块
+        first_run = is_first_run()
+        skip_verification = first_run or not HAS_KEY_VERIFICATION
+        
+        if not skip_verification:
+            # 验证API密钥
+            splash.showMessage("正在验证身份...", Qt.AlignBottom | Qt.AlignCenter, Qt.white)
+            app.processEvents()
+            
+            # 显示密钥验证对话框
+            if not show_verification_dialog():
+                # 验证失败，显示错误信息并退出
+                splash.close()
+                QMessageBox.critical(None, "验证失败", "API密钥验证失败或被取消，程序将退出！")
+                sys.exit(1)
+        else:
+            # 跳过验证
+            splash.showMessage("首次运行，跳过验证...", Qt.AlignBottom | Qt.AlignCenter, Qt.white)
+            app.processEvents()
+            print("跳过密钥验证步骤")
+        
+        # 验证成功或跳过验证，继续加载主界面
+        splash.showMessage("正在加载程序...", Qt.AlignBottom | Qt.AlignCenter, Qt.white)
         app.processEvents()
         
         # 创建主窗口
